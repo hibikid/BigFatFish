@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DATA_HOME } from '../runtime/paths.mjs';
+import { uninstallApprovalHook } from './manage-approval-hook.mjs';
 
 if (process.platform !== 'darwin') {
   process.stderr.write('This uninstaller is only for macOS.\n');
@@ -34,10 +35,11 @@ if (loaded()) {
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   if (loaded()) {
-    process.stderr.write('LaunchAgent is still loaded; automatic following was not removed.\n');
+    process.stderr.write('LaunchAgent is still loaded; desktop service was not removed.\n');
     process.exit(1);
   }
 }
 spawnSync('/bin/launchctl', ['disable', service], { encoding: 'utf8' });
 try { fs.unlinkSync(plistPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-process.stdout.write('Automatic following is disabled. Settings, resources and records were retained.\n');
+uninstallApprovalHook();
+process.stdout.write('Desktop service was removed. Settings, resources and records were retained.\n');

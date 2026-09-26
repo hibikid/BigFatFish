@@ -15,10 +15,10 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inl
 const jsonResult = (status, payload) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8' }, body: Buffer.from(JSON.stringify(payload)) });
 
 // Dispatch original resource handlers entirely in process; no HTTP listener exists.
-export function createDispatcher({ dataDir = DATA_HOME, service = null, monitor = true, autoRefresh = true, fetchImpl, fxFetchImpl = fetchImpl, onStop = () => {}, onShow = () => {}, statusInfo = () => ({}) } = {}) {
+export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVault = null, monitor = true, autoRefresh = true, fetchImpl, fxFetchImpl = fetchImpl, onStop = () => {}, onShow = () => {}, statusInfo = () => ({}) } = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
   migrateData(dataDir);
-  const whale = service || new WhaleService({ dataDir, ...(fetchImpl ? { fetchImpl } : {}) });
+  const whale = service || new WhaleService({ dataDir, secretVault, ...(fetchImpl ? { fetchImpl } : {}) });
   const fx = createFxService({ dataDir, ...(fxFetchImpl ? { fetchImpl: fxFetchImpl } : {}) });
   const routes = new Map(), effects = [];
   createWidgetHost(dataDir).apply({ whale, webServer: { register: r => { routes.set(r.path, r.handler); return () => routes.delete(r.path); }, tapIndex: () => () => {} }, effect: f => effects.push(f()) });
@@ -48,10 +48,30 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, monitor 
       const bytes = body == null ? Buffer.alloc(0) : Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
       if (bytes.length > 32 * 1024 * 1024) return jsonResult(413, { ok: false, error: '导入文件过大' });
       const parsed = () => JSON.parse(bytes.toString('utf8') || '{}');
-      if (url.pathname === '/api/status' && method === 'GET') return jsonResult(200, { ok: true, version: VERSION, buildVersion, transport: 'local-ipc', webpage: false, provider: whale.config.publicInfo(), monitor: watcher?.status() || { watching: 0, activeTurns: 0 }, dataDir, ...statusInfo() });
+      if (url.pathname === '/api/status' && method === 'GET') return jsonResult(200, { ok: true, version: VERSION, buildVersion, transport: 'local-ipc', webpage: false, provider: whale.config.publicInfo(), monitor: watcher?.status() || { watching: 0, activeTurns: 0 }, subscriptionRateLimits: whale.subscriptionRateLimits(), dataDir, ...statusInfo() });
+      if (url.pathname === '/api/subscription-rate-limits' && method === 'GET') return jsonResult(200, whale.subscriptionRateLimits());
       if (url.pathname === '/api/config') {
         if (method === 'GET') return jsonResult(200, { ok: true, ...whale.config.publicInfo() });
-        if (method === 'PUT') return jsonResult(200, { ok: true, settings: whale.config.save(parsed()) });
+        if (method === 'PUT') {
+          const input = parsed();
+          if (!input || typeof input !== 'object' || Array.isArray(input)) return jsonResult(400, { ok: false, error: '设置格式无效' });
+          // sourceSecrets is accepted only on this local, authenticated desktop
+          // request. It is never forwarded into ConfigStore or written to the
+          // settings JSON; the macOS vault stores ciphertext separately.
+          const { sourceSecrets = {}, ...settings } = input;
+          if (!sourceSecrets || typeof sourceSecrets !== 'object' || Array.isArray(sourceSecrets) || Object.keys(sourceSecrets).length > 20) return jsonResult(400, { ok: false, error: '直接输入的密钥格式无效' });
+          const saved = whale.config.save(settings);
+          const sources = new Map(saved.sources.map(source => [source.id, source]));
+          for (const [id, rawSecret] of Object.entries(sourceSecrets)) {
+            if (typeof rawSecret !== 'string' || rawSecret.length > 16384) return jsonResult(400, { ok: false, error: '直接输入的密钥格式无效' });
+            if (!rawSecret.trim()) continue;
+            const source = sources.get(id);
+            if (!source || source.keyMode !== 'keychain') return jsonResult(400, { ok: false, error: '直接输入密钥只能用于已选择 macOS 钥匙串的数据源' });
+            if (!secretVault?.write) return jsonResult(503, { ok: false, error: '此运行环境不能使用 macOS 钥匙串' });
+            secretVault.write(source.keyRef, rawSecret);
+          }
+          return jsonResult(200, { ok: true, settings: saved });
+        }
         return jsonResult(405, { ok: false });
       }
       if (url.pathname === '/api/fx/usd-cny') {

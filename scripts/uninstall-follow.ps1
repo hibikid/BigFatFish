@@ -20,4 +20,4 @@ if (Test-Path -LiteralPath $whaleStartup) {
     $whaleShortcut = $whaleShell.CreateShortcut($whaleStartup)
     if ($whaleShortcut.Arguments.Contains((Join-Path $whaleRoot 'desktop\supervisor.ps1'))) { Remove-Item -LiteralPath $whaleStartup }
 }
-Write-Output 'Automatic following disabled. Settings, resources and records are retained.'
+Write-Output 'Desktop service removed. Settings, resources and records are retained.'

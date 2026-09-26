@@ -11,12 +11,14 @@
     var STEP = 0.1;
     var CLICK_SQ = 9;
     var REFRESH_MS = 60000;
+    var SUBSCRIPTION_POLL_MS = 5000;
 
 
     var BUBBLE_MS = 5000;
     var FETCH_TIMEOUT_MS = 25000;
     var whaleMoneyTemplates = new WeakMap();
     var BALANCE_URL = '/dsh-whale/balance.json';
+    var SUBSCRIPTION_URL = '/api/subscription-rate-limits';
     var SIZE_URL = '/dsh-whale/size.json';
     var IMG_URL = '/dsh-whale/image.png?v=2';
     var GIF_URL = '/dsh-whale/rua.gif';
@@ -211,6 +213,7 @@
       dshwCustSuppressAt = Date.now();
     }
     var taskEndDrop = null;
+    var approvalSoundDrop = null;
     var moduleImgDrop = null;
     function dshwCustSel(sel, opts) {
       if (!sel || !sel.parentNode || sel.__dshwCust) return {
@@ -360,6 +363,28 @@
         taskEnd: usageSet.taskEnd
       });
     });
+    var approvalSoundToggle = document.createElement('input');
+    approvalSoundToggle.type = 'checkbox';
+    approvalSoundToggle.className = 'dshwv-check';
+    approvalSoundToggle.checked = true;
+    approvalSoundToggle.title = '收到 Codex 权限请求时播放提示音';
+    approvalSoundToggle.addEventListener('change', function () {
+      usageSet = usageSet || ({});
+      usageSet.approvalSound = usageSet.approvalSound || { on: true, sel: 'preset:fx1:release' };
+      usageSet.approvalSound.on = approvalSoundToggle.checked;
+      approvalSoundSel.disabled = !approvalSoundToggle.checked;
+      if (approvalSoundDrop) approvalSoundDrop.refresh();
+      saveUsageSettings({ approvalSound: usageSet.approvalSound });
+    });
+    var approvalSoundSel = document.createElement('select');
+    approvalSoundSel.className = 'dshwv-sound';
+    approvalSoundSel.title = '选择审批提醒音：音效组或自定义音频片段';
+    approvalSoundSel.addEventListener('change', function () {
+      usageSet = usageSet || ({});
+      usageSet.approvalSound = usageSet.approvalSound || { on: true, sel: 'preset:fx1:release' };
+      usageSet.approvalSound.sel = approvalSoundSel.value;
+      saveUsageSettings({ approvalSound: usageSet.approvalSound });
+    });
     function fillTaskEndOptions(pref) {
       var prefSel = usageSet && usageSet.taskEnd && usageSet.taskEnd.sel || pref && pref.sel || '';
       var cur = taskEndSel.value || prefSel || '';
@@ -441,18 +466,36 @@
       }
       if (taskEndDrop) taskEndDrop.refresh();
     }
+    function fillApprovalSoundOptions(pref) {
+      var selected = pref && pref.sel || approvalSoundSel.value || 'preset:fx1:release';
+      approvalSoundSel.replaceChildren();
+      for (var i = 0; i < taskEndSel.options.length; i++) approvalSoundSel.appendChild(taskEndSel.options[i].cloneNode(true));
+      var found = false;
+      for (var j = 0; j < approvalSoundSel.options.length; j++) if (approvalSoundSel.options[j].value === selected) {
+        found = true;
+        break;
+      }
+      approvalSoundSel.value = found ? selected : 'preset:fx1:release';
+      if (!found && audioLoaded && usageSet && usageSet.approvalSound) usageSet.approvalSound.sel = approvalSoundSel.value;
+      if (approvalSoundDrop) approvalSoundDrop.refresh();
+    }
     function refreshTaskEndAfterAudio() {
       try {
         fillTaskEndOptions(usageSet && usageSet.taskEnd || null);
+        fillApprovalSoundOptions(usageSet && usageSet.approvalSound || null);
       } catch (err) {}
     }
     function playTaskEndSound() {
       try {
         if (!usageSet || !usageSet.taskEnd || !usageSet.taskEnd.on || soundOn === false) return;
-        var sel = usageSet.taskEnd.sel || taskEndSel.value || '';
+        playSelectedSound(usageSet.taskEnd.sel || taskEndSel.value || '');
+      } catch (err) {}
+    }
+    function playSelectedSound(sel) {
+      try {
         var url = '';
         if (sel.indexOf('grp:') === 0) {
-          playTaskEndGroupClick(sel.slice(4));
+          playSoundGroupClick(sel.slice(4));
           return;
         }
         if (sel.indexOf('frag:') === 0) url = '/dsh-whale/audio-fragment.wav?id=' + encodeURIComponent(sel.slice(5)); else if (sel.indexOf('preset:') === 0) {
@@ -467,7 +510,7 @@
         a.play().catch(function () {});
       } catch (err) {}
     }
-    function playTaskEndGroupClick(groupId) {
+    function playSoundGroupClick(groupId) {
       try {
         if (!groupId) return;
         var g = null;
@@ -703,6 +746,23 @@
       }
     } catch (err) {}
     menuBox.appendChild(rowTaskEnd);
+    var rowApprovalSound = menuRow();
+    rowApprovalSound.appendChild(menuLabel('审批提醒音效'));
+    rowApprovalSound.appendChild(approvalSoundToggle);
+    rowApprovalSound.appendChild(approvalSoundSel);
+    approvalSoundDrop = dshwCustSel(approvalSoundSel, {
+      bottom: function () { return usageNavRow; },
+      scrollNames: true
+    });
+    try {
+      var approvalSoundWrap = approvalSoundSel.parentNode;
+      if (approvalSoundWrap) {
+        approvalSoundWrap.style.flex = '0 0 120px';
+        approvalSoundWrap.style.width = '120px';
+        approvalSoundWrap.style.maxWidth = '120px';
+      }
+    } catch (err) {}
+    menuBox.appendChild(rowApprovalSound);
     var currencyRow = menuRow();
     currencyRow.appendChild(menuLabel('显示币种'));
     var currencySel = document.createElement('select');
@@ -1202,6 +1262,20 @@
     function bindUsageMoney(element, x, currency) {
       return WhaleMoney.bind(element, usageMoneyText(x, currency));
     }
+    function usageTokens(value) {
+      var n = Number(value);
+      if (!isFinite(n) || n < 0) return '—';
+      if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 1 : 2).replace(/\.0+$/, '') + 'M tokens';
+      if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 1 : 2).replace(/\.0+$/, '') + 'K tokens';
+      return Math.floor(n).toLocaleString('en-US') + ' tokens';
+    }
+    function usageRawAmounts(rows) {
+      if (!Array.isArray(rows) || !rows.length) return '金额待获取';
+      return rows.map(function (row) {
+        var n = Number(row && row.total);
+        return /^[A-Z]{3}$/.test(row && row.currency || '') && isFinite(n) ? row.currency + ' ' + n.toLocaleString('en-US', { maximumFractionDigits: 6 }) : '';
+      }).filter(Boolean).join(' · ') || '金额待获取';
+    }
     function usageDayLabel(day) {
       try {
         var d = day.split('-');
@@ -1609,7 +1683,7 @@
         if (d && d.ok && d.settings) usageSet = d.settings;
         WhaleMoney.refreshBindings(usagePanel);
         fillUsagePanel(d);
-        if (d && d.ok && d.today && isFinite(Number(d.today.total))) {
+        if (state.todayUsageSource !== 'source-api' && d && d.ok && d.today && isFinite(Number(d.today.total))) {
           var recTotal = Number(d.today.total);
           if (state.todayUsage === null || recTotal >= state.todayUsage) {
             state.todayUsage = recTotal;
@@ -1641,6 +1715,33 @@
         wrap.textContent = '记录加载失败';
         hostEl.appendChild(wrap);
         return;
+      }
+      var overall = d.overall;
+      if (overall && overall.ok) {
+        wrap.appendChild(uSectionTitle('全部 API 总消耗（会话）', usageTokens(overall.all && overall.all.tokens)));
+        var totalBox = document.createElement('div');
+        totalBox.className = 'dshwv-usage-scroll dshwv-usage-today';
+        [['今天', overall.today], ['近7天', overall.total7], ['累计', overall.all]].forEach(function (pair) {
+          var row = document.createElement('div'); row.className = 'dshwv-usage-row';
+          var label = document.createElement('span'); label.textContent = pair[0]; row.appendChild(label);
+          var stat = document.createElement('span'); stat.textContent = usageTokens(pair[1] && pair[1].tokens); row.appendChild(stat);
+          totalBox.appendChild(row);
+        });
+        var observed = overall.observed || [];
+        if (observed.length) {
+          observed.forEach(function (row) {
+            var line = document.createElement('div'); line.className = 'dshwv-usage-hint';
+            line.textContent = row.currency + '：今日已观测 ' + Number(row.today || 0).toLocaleString('en-US', { maximumFractionDigits: 6 }) + ' · 近7天 ' + Number(row.total7 || 0).toLocaleString('en-US', { maximumFractionDigits: 6 });
+            totalBox.appendChild(line);
+          });
+        }
+        (overall.sources || []).forEach(function (source) {
+          var line = document.createElement('div'); line.className = 'dshwv-usage-row';
+          var name = document.createElement('span'); name.className = 'dshwv-usage-model'; name.textContent = source.name || '未命名来源'; line.appendChild(name);
+          var stat = document.createElement('span'); stat.textContent = usageTokens(source.total7 && source.total7.tokens); stat.title = '近7天 · 累计 ' + usageTokens(source.all && source.all.tokens) + ' · ' + usageRawAmounts(source.total7 && source.total7.amounts); line.appendChild(stat);
+          totalBox.appendChild(line);
+        });
+        wrap.appendChild(totalBox);
       }
       var today = d.today || ({});
       var todayModels = today.models || [];
@@ -7809,8 +7910,11 @@
       left: 0,
       top: 0,
       balance: null,
+      balanceText: '',
       currency: null,
       todayUsage: null,
+      todayUsageSource: 'ledger',
+      subscription: null,
       status: 'loading',
       message: '',
       flip: false
@@ -8030,14 +8134,14 @@
 
     
     
-    function restoreBubbleLines() {
+    function restoreBubbleLines(firstSubscriptionQuota) {
       gifEl.style.display = 'none';
       labelEl.style.display = '';
       labelEl.className = 'dshwv-label';
-      labelEl.textContent = '当前 API 余额';
+      labelEl.textContent = bubbleLabelText();
       amountEl.style.display = '';
       hintEl.style.display = '';
-      render();
+      render(firstSubscriptionQuota);
     }
 
     var bubbleTtlTimer = null;
@@ -8227,12 +8331,12 @@
       bubbleBox.classList.remove('dshwv-pop-open');
     }
     
-    function sceneOpen(kind, renderFn, ttlMs) {
+    function sceneOpen(kind, renderFn, ttlMs, options) {
       var wasOpen = bubbleShown;
       var previousScene = bubbleScene;
       bubbleClearAll();
       var entry = bubbleSceneEpoch;
-      bubbleScene = { kind: kind, ttlMs: ttlMs || 0 };
+      bubbleScene = { kind: kind, ttlMs: ttlMs || 0, firstSubscriptionQuota: !!(options && options.firstSubscriptionQuota) };
       bubbleShown = true;
       costBubbleActive = kind === 'cost';
       bubbleRandomActive = kind === 'random';
@@ -8265,6 +8369,7 @@
     }
     function bubbleAutoClose() {
       bubbleTtlTimer = null;
+      if (bubbleScene && bubbleScene.kind === 'approval') return;
       if (bubbleScene && bubbleScene.kind === 'cost') {
         if (whaleSysSwapNext()) return;
         hideCostBubble();
@@ -8286,14 +8391,67 @@
       } catch (err) {}
       if (bubbleScene && bubbleScene.ttlMs > 0) bubbleTtlTimer = setTimeout(bubbleAutoClose, bubbleScene.ttlMs);
     }
-    function bubbleRenderDefault() {
-      restoreBubbleLines();
+    function bubbleRenderDefault(firstSubscriptionQuota) {
+      restoreBubbleLines(firstSubscriptionQuota);
     }
     function bubbleRenderRandom(lines) {
       applyBubbleLines(lines);
     }
+    function bubbleSubscriptionNoticeLine(text, level, className) {
+      var line = document.createElement('div');
+      line.className = 'dshwv-trow dshwv-subscription-notice-line ' + className;
+      line.textContent = text;
+      line.style.fontSize = 'calc(var(--dshw-u) * ' + bubbleModuleFontU(level) + ')';
+      line.style.lineHeight = '1.15';
+      line.style.fontWeight = level === 8 ? '700' : '600';
+      return line;
+    }
+    function bubbleRenderSubscriptionNotice(snapshot) {
+      // These three elements are deliberately separate from the legacy
+      // amount/token fields, so a personal subscription turn cannot inherit
+      // their size, color, or money-binding behavior.
+      gifEl.style.display = 'none';
+      labelEl.style.display = 'none';
+      amountEl.style.display = 'none';
+      hintEl.style.display = 'none';
+      WhaleMoney.clearBindings(amountEl);
+      WhaleMoney.clearBindings(hintEl);
+
+      var container = document.createElement('div');
+      container.className = 'dshwv-subscription-notice';
+      container.style.display = 'flex';
+      container.style.flexDirection = 'column';
+      container.style.alignItems = 'center';
+      var fiveHour = bubbleSubscriptionNoticeLine(
+        '5小时剩余' + quotaPercent(snapshot && snapshot.fiveHour),
+        8,
+        'dshwv-rgb dshwv-rgb-indigo dshwv-subscription-notice-quota'
+      );
+      fiveHour.style.animationDuration = bubbleMarqueeDur();
+      var sevenDay = bubbleSubscriptionNoticeLine(
+        '7天剩余' + quotaPercent(snapshot && snapshot.sevenDay),
+        8,
+        'dshwv-rgb dshwv-rgb-indigo dshwv-subscription-notice-quota'
+      );
+      sevenDay.style.animationDuration = bubbleMarqueeDur();
+      var reset = bubbleSubscriptionNoticeLine(
+        '5小时重置' + (quotaResetTime(snapshot && snapshot.fiveHour) || '--:--'),
+        4,
+        'dshwv-subscription-notice-reset'
+      );
+      reset.style.color = 'rgb(159,176,217)';
+      container.appendChild(fiveHour);
+      container.appendChild(sevenDay);
+      container.appendChild(reset);
+      bubbleTarget.appendChild(container);
+    }
     function bubbleRenderCost(amount, notice) {
       notice = notice || WhaleTurnNotice.snapshot({ amount: amount }, state.currency);
+      var quota = notice.subscriptionRateLimits;
+      if (hasSubscriptionQuota(quota)) {
+        bubbleRenderSubscriptionNotice(quota);
+        return;
+      }
       labelEl.style.display = '';
       labelEl.className = 'dshwv-label';
       labelEl.textContent = notice.label;
@@ -8347,6 +8505,7 @@
         hideBubble();
         return;
       }
+      var firstSubscriptionQuota = bubbleSeqIdx === 0 && hasSubscriptionQuota();
       bubbleSeqIdx++;
       var item = bubbleIsChoice(step) ? bubblePickChoiceStep(step) : step;
       if (!item) {
@@ -8361,10 +8520,12 @@
         }, BUBBLE_MS);
       } else if (item.kind === 'custom') {
         sceneOpen('custom', function () {
-          bubbleRenderModules(item.modules || []);
-        }, BUBBLE_MS);
+          bubbleRenderModules(item.modules || [], { firstSubscriptionQuota: firstSubscriptionQuota });
+        }, BUBBLE_MS, { firstSubscriptionQuota: firstSubscriptionQuota });
       } else {
-        sceneOpen('normal', bubbleRenderDefault, BUBBLE_MS);
+        sceneOpen('normal', function () {
+          bubbleRenderDefault(firstSubscriptionQuota);
+        }, BUBBLE_MS, { firstSubscriptionQuota: firstSubscriptionQuota });
       }
     }
     function bubbleModuleFontU(level) {
@@ -8372,11 +8533,33 @@
       n = Math.max(1, Math.min(50, Math.round(n)));
       return Math.round(40 + (n - 1) * 200 / 49);
     }
-    function bubbleAmountText() {
-      return state.balance === null ? '…' : fmt(state.balance, state.currency);
+    function hasSubscriptionQuota(snapshot) {
+      var value = snapshot || state.subscription;
+      return !!(value && value.available !== false && value.fiveHour && value.sevenDay &&
+        isFinite(Number(value.fiveHour.remainingPercent)) && isFinite(Number(value.sevenDay.remainingPercent)));
     }
-    function bubbleTodayText() {
-      return '今日已观测 ' + (state.todayUsage !== null && state.todayUsage !== undefined ? fmt(state.todayUsage, state.currency) : '--');
+    function quotaPercent(window) {
+      var n = Number(window && window.remainingPercent);
+      return isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) + '%' : '--';
+    }
+    function quotaResetTime(window) {
+      var ms = Date.parse(window && window.resetsAt || '');
+      if (!isFinite(ms)) return '';
+      try {
+        return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
+      } catch (err) {
+        var d = new Date(ms);
+        return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+      }
+    }
+    function quotaFirstClickBalanceText(snapshot) {
+      return '5小时剩余' + quotaPercent(snapshot && snapshot.fiveHour) + '\n7天剩余' + quotaPercent(snapshot && snapshot.sevenDay);
+    }
+    function quotaFirstClickResetText(snapshot) {
+      return '5小时重置' + (quotaResetTime(snapshot && snapshot.fiveHour) || '--:--');
+    }
+    function bubbleLabelText(snapshot) {
+      return '当前 API 余额';
     }
     function bubbleContentTokenMap(m, snapshot) {
       m = m || ({});
@@ -8384,7 +8567,7 @@
       var v = '';
       var map = {};
       if (m.type === 'balance') {
-        v = values.balance === null ? '…' : fmt(values.balance, values.currency);
+        v = values.balanceText ? values.balanceText : values.balance === null ? '…' : fmt(values.balance, values.currency);
         map['balance_ds'] = v;
         map['balance_api'] = v;
       } else if (m.type === 'today') {
@@ -8403,7 +8586,8 @@
           d: d
         });
       }
-      if (m.type === 'balance') add('balance_ds', '余额数值'); else if (m.type === 'today') add('expense_ds', '今日已观测金额');
+      if (m.type === 'balance') add('balance_ds', '余额数值');
+      else if (m.type === 'today') add('expense_ds', '今日已观测金额');
       return arr;
     }
     var dshwvTplHelpEl = null;
@@ -8487,16 +8671,23 @@
       return pick;
     }
     
-    function bubbleRowContentOf(mod) {
+    function bubbleRowContentOf(mod, options) {
       mod = mod || ({});
       if (mod.type === 'balance' || mod.type === 'today') {
-        var captured = { balance: state.balance, todayUsage: state.todayUsage, currency: state.currency || 'USD' };
+        var captured = { balance: state.balance, balanceText: state.balanceText, todayUsage: state.todayUsage, currency: state.currency || 'USD', subscription: state.subscription };
+        var firstSubscriptionQuota = !!(options && options.firstSubscriptionQuota && hasSubscriptionQuota(captured.subscription));
         var moneyText = function () {
-          var value = mod.type === 'balance' ? captured.balance === null ? '…' : fmt(captured.balance, captured.currency) :
+          if (firstSubscriptionQuota) return mod.type === 'balance' ? quotaFirstClickBalanceText(captured.subscription) : quotaFirstClickResetText(captured.subscription);
+          var value = mod.type === 'balance' ? captured.balanceText || (captured.balance === null ? '…' : fmt(captured.balance, captured.currency)) :
             '今日已观测 ' + (captured.todayUsage != null ? fmt(captured.todayUsage, captured.currency) : '--');
           return bubbleContentText(mod, value, captured);
         };
-        return { txt: moneyText(), line: null, moneyText: moneyText };
+        return {
+          txt: moneyText(),
+          line: null,
+          moneyText: moneyText,
+          preserveLineBreaks: firstSubscriptionQuota && mod.type === 'balance'
+        };
       }
       var reminder = whaleMoneyTemplates.get(mod);
       function reminderText(template) {
@@ -8608,12 +8799,19 @@
           tx: tx,
           fSize: fSize,
           mod: m,
-          bg: needBg
+          bg: needBg,
+          preserveLineBreaks: !!(rowContent && rowContent.preserveLineBreaks)
         };
       }
       function maybeWrap(blk) {
         if (!blk) return;
         try {
+          if (blk.preserveLineBreaks) {
+            blk.el.style.whiteSpace = 'pre-line';
+            blk.el.style.overflowWrap = 'anywhere';
+            blk.el.style.wordBreak = 'break-word';
+            return;
+          }
           var compFs = window.getComputedStyle ? parseFloat(window.getComputedStyle(blk.el).fontSize) : 0;
           var multNow = bubbleModuleFontU(blk.fSize);
           var capPx = compFs && multNow ? 560 * compFs / multNow : 0;
@@ -8713,7 +8911,7 @@
               pe.style.webkitBoxDecorationBreak = 'clone';
             }
             {
-              pe.style.whiteSpace = 'normal';
+              pe.style.whiteSpace = pr.preserveLineBreaks ? 'pre-line' : 'normal';
               pe.style.overflowWrap = 'anywhere';
               pe.style.wordBreak = 'break-word';
               pe.style.maxWidth = '';
@@ -8729,9 +8927,9 @@
     }
 
     
-    function bubbleRenderModules(mods) {
+    function bubbleRenderModules(mods, options) {
       if (!bubbleBuilding) return; // Including switching: only the entry builder may write.
-      var snapshot = bubbleSnapshot(mods, true);
+      var snapshot = bubbleSnapshot(mods, true, options);
       gifEl.style.display = 'none';
       labelEl.style.display = 'none';
       amountEl.style.display = 'none';
@@ -8739,12 +8937,12 @@
       bubbleRowsTo(bubbleTarget, snapshot.modules, snapshot.rows);
     }
     var bubblePreviousPicks = new WeakMap();
-    function bubbleSnapshot(mods, remember) {
+    function bubbleSnapshot(mods, remember, options) {
       var rows = new Map();
       var copies = (Array.isArray(mods) ? mods : []).map(function (original) {
         var copy = bubbleCloneModule(original);
         if (copy.type === 'random') copy._lastPick = remember && original && typeof original === 'object' ? bubblePreviousPicks.get(original) : undefined;
-        var content = bubbleRowContentOf(copy);
+        var content = bubbleRowContentOf(copy, options);
         if (remember && copy.type === 'random' && original && typeof original === 'object') bubblePreviousPicks.set(original, copy._lastPick);
         rows.set(copy, Object.freeze(content));
         return copy;
@@ -8804,6 +9002,10 @@
     function whaleClick() {
       try {
         if (!bubbleOn) return;
+        if (bubbleScene && bubbleScene.kind === 'approval') {
+          hideUsageAlertBubble();
+          return;
+        }
         if (bubbleScene && (bubbleScene.kind === 'cost' || bubbleScene.kind === 'alert')) return;
         if (!bubbleShown) {
           bubbleRoundOn = true;
@@ -8827,7 +9029,7 @@
           hideCostBubble();
           return;
         }
-        if (bubbleScene && bubbleScene.kind === 'alert') {
+        if (bubbleScene && (bubbleScene.kind === 'alert' || bubbleScene.kind === 'approval')) {
           hideUsageAlertBubble();
           return;
         }
@@ -8872,6 +9074,27 @@
         notice: notice,
         rank: 3
       });
+    }
+    function playApprovalSound() {
+      if (!soundOn || usageSet && usageSet.approvalSound && !usageSet.approvalSound.on) return;
+      try {
+        playSelectedSound(approvalSoundSel.value || 'preset:fx1:release');
+      } catch (err) {}
+    }
+    function showApprovalReminder() {
+      playApprovalSound();
+      if (!bubbleOn) return;
+      var item = {
+        kind: 'approval',
+        mods: [
+          { type: 'text', text: '需要批准', size: 9, bold: true },
+          { type: 'text', text: '请到原会话批准', size: 5 }
+        ],
+        ttlMs: 0
+      };
+      if (whaleSysItem && whaleSysItem.kind !== 'approval') whaleSysQueue.unshift(whaleSysItem);
+      whaleSysItem = item;
+      sceneOpen('approval', function () { bubbleRenderModules(item.mods); }, 0);
     }
     function hideCostBubble() {
       if (whaleSysSwapNext()) return;
@@ -8924,7 +9147,7 @@
         }
         if (whaleSysItem) return;
         if (!whaleSysQueue.length) return;
-        if (costBubbleActive || bubbleScene && bubbleScene.kind === 'alert') return;
+        if (costBubbleActive || bubbleScene && (bubbleScene.kind === 'alert' || bubbleScene.kind === 'approval')) return;
         var item = whaleSysQueue.shift();
         if (!item) return;
         whaleSysItem = item;
@@ -8996,14 +9219,71 @@
     function fmt(balance, currency) {
       return WhaleMoney.formatMoney(balance, currency || state && state.currency || 'USD', true);
     }
+    function quotaText(value) {
+      if (!value || !isFinite(Number(value.limit)) || !isFinite(Number(value.used))) return '';
+      try {
+        var formatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 });
+        return formatter.format(Number(value.used)) + '/' + formatter.format(Number(value.limit));
+      } catch (err) { return String(value.used) + '/' + String(value.limit); }
+    }
+    function hasBalanceDisplay(values) {
+      return !!(values && values.balanceText) || !!(values && values.balance !== null && values.balance !== undefined);
+    }
     
-    function render() {
+    function render(firstSubscriptionQuota) {
       // Stopgap guard plus root fix: refresh() no longer calls this function.
       if (bubbleFrames.switching && !bubbleBuilding) return;
       if (!bubbleBuilding) return;
-      var captured = { balance: state.balance, todayUsage: state.todayUsage, currency: state.currency || 'USD', status: state.status, message: state.message };
-      WhaleMoney.bind(amountEl, function () { return captured.balance === null ? (captured.status === 'error' ? '--' : '…') : fmt(captured.balance, captured.currency); });
-      WhaleMoney.bind(hintEl, function () { return captured.status === 'error' ? (captured.message || '获取失败 · 点击重试').slice(0, 20) : captured.balance === null ? '加载中…' : '今日已观测 ' + (captured.todayUsage != null ? fmt(captured.todayUsage, captured.currency) : '--'); });
+      var captured = { balance: state.balance, balanceText: state.balanceText, todayUsage: state.todayUsage, currency: state.currency || 'USD', subscription: state.subscription, status: state.status, message: state.message };
+      var showSubscriptionQuota = !!(firstSubscriptionQuota && hasSubscriptionQuota(captured.subscription));
+      amountEl.style.whiteSpace = showSubscriptionQuota ? 'pre-line' : '';
+      WhaleMoney.bind(amountEl, function () { return showSubscriptionQuota ? quotaFirstClickBalanceText(captured.subscription) :
+        captured.balanceText || (!hasBalanceDisplay(captured) ? (captured.status === 'error' ? '--' : '…') : fmt(captured.balance, captured.currency)); });
+      WhaleMoney.bind(hintEl, function () { return showSubscriptionQuota ? quotaFirstClickResetText(captured.subscription) :
+        captured.status === 'error' ? (captured.message || '获取失败 · 点击重试').slice(0, 20) : !hasBalanceDisplay(captured) ? '加载中…' : '今日已观测 ' + (captured.todayUsage != null ? fmt(captured.todayUsage, captured.currency) : '--'); });
+    }
+    function refreshOpenNormalBubble() {
+      if (!bubbleShown || !bubbleScene || bubbleScene.kind !== 'normal') return;
+      var firstSubscriptionQuota = !!bubbleScene.firstSubscriptionQuota;
+      sceneOpen('normal', function () {
+        bubbleRenderDefault(firstSubscriptionQuota);
+      }, bubbleScene.ttlMs || BUBBLE_MS, { firstSubscriptionQuota: firstSubscriptionQuota });
+    }
+    function subscriptionFingerprint(value) {
+      if (!hasSubscriptionQuota(value)) return '';
+      return [value.planType || '', value.fiveHour.remainingPercent, value.fiveHour.resetsAt,
+        value.sevenDay.remainingPercent, value.sevenDay.resetsAt].join('|');
+    }
+    function applySubscriptionQuota(subscription) {
+      if (!hasSubscriptionQuota(subscription)) return false;
+      var changed = subscriptionFingerprint(state.subscription) !== subscriptionFingerprint(subscription);
+      state.subscription = subscription;
+      state.message = '';
+      state.status = 'ok';
+      var plan = subscription.planType ? ' · ' + String(subscription.planType).toUpperCase() : '';
+      root.title = 'Codex 订阅额度' + plan + '（来自本机会话额度快照）';
+      img.alt = 'Codex 订阅额度';
+      if (changed) {
+        window.dispatchEvent(new CustomEvent('whale-balance', { detail: subscription }));
+        refreshOpenNormalBubble();
+      }
+      return true;
+    }
+    var subscriptionPolling = false;
+    function refreshSubscriptionQuota() {
+      if (subscriptionPolling) return;
+      subscriptionPolling = true;
+      fetch(SUBSCRIPTION_URL, { cache: 'no-store' }).then(function (r) {
+        return r.json();
+      }).then(function (subscription) {
+        if (applySubscriptionQuota(subscription)) return;
+        if (state.subscription !== null) {
+          state.subscription = null;
+          refresh(false);
+        }
+      }).catch(function () {}).finally(function () {
+        subscriptionPolling = false;
+      });
     }
     function express() {
       positioner.style.transform = 'translate3d(' + state.left + 'px,' + state.top + 'px,0)';
@@ -9023,14 +9303,14 @@
       if (state.h === 'right') {
         state.left = Math.max(0, vp.w - w - state.hOff - rightGap());
       } else if (state.h === 'left') {
-        state.left = state.hOff;
+        state.left = clamp(state.hOff, 0, Math.max(0, vp.w - w - rightGap()));
       } else {
         state.left = clamp(state.left, 0, Math.max(0, vp.w - w - rightGap()));
       }
       if (state.v === 'bottom') {
         state.top = Math.max(0, vp.h - h - state.vOff);
       } else if (state.v === 'top') {
-        state.top = state.vOff;
+        state.top = clamp(state.vOff, 0, Math.max(0, vp.h - h));
       } else {
         state.top = clamp(state.top, 0, Math.max(0, vp.h - h));
       }
@@ -9107,7 +9387,7 @@
     function refresh(manual) {
       if (busy) return;
       busy = true;
-      if (manual || state.balance === null) state.status = 'loading';
+      if (manual || !hasBalanceDisplay(state) && !hasSubscriptionQuota()) state.status = 'loading';
       var ctrl = null;
       var timer = null;
       try {
@@ -9118,25 +9398,46 @@
           } catch (err) {}
         }, FETCH_TIMEOUT_MS);
       } catch (err) {}
-      fetch(BALANCE_URL + (manual ? '?refresh=1' : ''), {
+      fetch(SUBSCRIPTION_URL, {
         cache: 'no-store',
         signal: ctrl ? ctrl.signal : undefined
       }).then(function (r) {
         return r.json();
+      }).catch(function () {
+        // A temporary local read failure should not erase an already displayed
+        // subscription snapshot just to fall back to an unrelated API key.
+        return undefined;
+      }).then(function (subscription) {
+        if (applySubscriptionQuota(subscription)) return null;
+        if (subscription === undefined && hasSubscriptionQuota()) {
+          state.status = 'ok';
+          return null;
+        }
+        state.subscription = null;
+        return fetch(BALANCE_URL + (manual ? '?refresh=1' : ''), {
+          cache: 'no-store',
+          signal: ctrl ? ctrl.signal : undefined
+        }).then(function (r) {
+          return r.json();
+        });
       }).then(function (data) {
+        if (data === null) return;
         if (data && data.ok) {
-          var nb = data.unlimited ? Infinity : Number(data.totalBalance);
+          var nb = data.unlimited ? Infinity : data.totalBalance === null || data.totalBalance === undefined ? null : Number(data.totalBalance);
           var nc = String(data.currency || 'USD');
           state.balance = nb;
+          state.balanceText = quotaText(data.primaryRateLimit);
           state.currency = nc;
           WhaleMoney.setNativeCurrency(nc);
           state.message = '';
           state.todayUsage = data.todayUsage !== undefined ? data.todayUsage : null;
+          state.todayUsageSource = data.todayUsageSource || 'ledger';
           state.unlimited = !!data.unlimited;
           state.providerName = data.providerName || '';
           state.balanceScope = data.balanceScope || '';
           state.stale = !!data.stale;
           root.title = (data.providerName || '') + ' · ' + (data.balanceLabel || 'API 可用余额') + (data.stale ? '（上次成功数据）' : '');
+          img.alt = '当前 API 余额';
           window.dispatchEvent(new CustomEvent('whale-balance', {
             detail: data
           }));
@@ -9152,8 +9453,10 @@
           }));
         }
       }).catch(function () {
-        state.status = 'error';
-        state.message = '获取失败';
+        if (!hasSubscriptionQuota()) {
+          state.status = 'error';
+          state.message = '获取失败';
+        }
       }).finally(function () {
         busy = false;
         if (timer) clearTimeout(timer);
@@ -10079,6 +10382,7 @@
     var AUDIO_URL = '/dsh-whale/audio.json';
     var audioGroups = [];
     var audioFragments = [];
+    var audioLoaded = false;
     var audioGroupPanelOpen = false;
     function loadAudio() {
       try {
@@ -10090,6 +10394,7 @@
           if (!d || !d.ok) return;
           if (Array.isArray(d.groups)) audioGroups = d.groups;
           if (Array.isArray(d.fragments)) audioFragments = d.fragments;
+          audioLoaded = true;
           assetWarning(d);
           var exists = false;
           for (var i = 0; i < audioGroups.length; i++) if (audioGroups[i].id === soundSet) {
@@ -11328,14 +11633,19 @@
           taskEndToggle.checked = !!usageSet.taskEnd.on;
           taskEndSel.disabled = !usageSet.taskEnd.on;
         }
+        if (usageSet && usageSet.approvalSound) {
+          approvalSoundToggle.checked = !!usageSet.approvalSound.on;
+          approvalSoundSel.disabled = !usageSet.approvalSound.on;
+        }
         if (usageSet && usageSet.outcomeNotice) {
           failedNoticeToggle.checked = usageSet.outcomeNotice.failed !== false;
           cancelledNoticeToggle.checked = usageSet.outcomeNotice.cancelled !== false;
         }
         fillTaskEndOptions(usageSet && usageSet.taskEnd);
+        fillApprovalSoundOptions(usageSet && usageSet.approvalSound);
         setTimeout(function () {
           try {
-            if (audioFragments && audioFragments.length) fillTaskEndOptions(usageSet && usageSet.taskEnd);
+            if (audioFragments && audioFragments.length) refreshTaskEndAfterAudio();
           } catch (err) {}
         }, 1500);
       } catch (err) {}
@@ -11437,6 +11747,9 @@
     setInterval(function () {
       refresh(false);
     }, REFRESH_MS);
+    setInterval(function () {
+      refreshSubscriptionQuota();
+    }, SUBSCRIPTION_POLL_MS);
     window.addEventListener('whale-refresh', function () {
       refresh(true);
     });
@@ -11483,6 +11796,7 @@
       } catch (err) { lastCostPending = false; }
     }
     setInterval(pollLastTurn, 1000);
+    window.addEventListener('whale-approval-request', showApprovalReminder);
   }
   if (dshwEnabled) {
     try {

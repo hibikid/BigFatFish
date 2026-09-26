@@ -86,14 +86,15 @@ async function stopStaleRuntime() {
 }
 
 const config = readJson(configFile, {});
-if (config.platform !== 'darwin' || config.mode !== 'follow-codex' || config.enabled !== true) {
-  process.stderr.write('macOS follow configuration is missing, disabled or invalid. Run scripts/install-macos.mjs first.\n');
+const freeDesktop = config.mode === 'free-desktop';
+if (config.platform !== 'darwin' || !['follow-codex', 'free-desktop'].includes(config.mode) || config.enabled !== true) {
+  process.stderr.write('macOS desktop configuration is missing, disabled or invalid. Run scripts/install-macos.mjs first.\n');
   process.exit(1);
 }
 const electronPath = path.resolve(config.electronPath || '');
 const probePath = path.resolve(config.probePath || '');
-if (!fs.existsSync(electronPath) || !fs.existsSync(probePath)) {
-  process.stderr.write('Desktop runtime or window probe is missing. Run scripts/install-macos.mjs first.\n');
+if (!fs.existsSync(electronPath) || (!freeDesktop && !fs.existsSync(probePath))) {
+  process.stderr.write(freeDesktop ? 'Desktop runtime is missing. Run scripts/install-macos.mjs first.\n' : 'Desktop runtime or window probe is missing. Run scripts/install-macos.mjs first.\n');
   process.exit(1);
 }
 
@@ -154,6 +155,7 @@ async function waitForHostDelivery(timeoutMs) {
 function pausedFor() {
   const pause = readJson(pauseFile, {});
   if (!Object.keys(pause).length) return false;
+  if (freeDesktop) return pause.pauseAll === true;
   if (!hostState.hostAlive) {
     try { fs.unlinkSync(pauseFile); } catch {}
     return false;
@@ -166,7 +168,7 @@ function pausedFor() {
 }
 
 function startChild() {
-  if (stopping || child || !hostState.hostAlive || pausedFor()) return;
+  if (stopping || child || (!freeDesktop && !hostState.hostAlive) || pausedFor()) return;
   const now = Date.now();
   if (now - lastLaunchAt < 4000) return;
   const main = path.join(pluginRoot, 'desktop', 'main.cjs');
@@ -174,11 +176,12 @@ function startChild() {
     log('desktop/main.cjs is missing');
     return;
   }
-  const environment = { ...process.env, WHALE_INITIAL_HOST: JSON.stringify(hostState), WHALE_LAUNCH_TIME: String(now) };
+  const environment = { ...process.env, WHALE_LAUNCH_TIME: String(now) };
+  if (!freeDesktop) environment.WHALE_INITIAL_HOST = JSON.stringify(hostState);
   delete environment.ELECTRON_RUN_AS_NODE;
   let current;
   try {
-    current = spawn(electronPath, [main, '--whale-data=' + dataDir, '--supervised'], {
+    current = spawn(electronPath, [main, '--whale-data=' + dataDir, '--supervised', ...(freeDesktop ? ['--free-desktop'] : [])], {
       cwd: pluginRoot,
       env: environment,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -218,8 +221,10 @@ function waitForExit(running, timeoutMs) {
 async function stopChild() {
   const running = child;
   if (!running) return;
-  queueHostState({ hostAlive: false, monitorExit: true, serial: ++sequence });
-  await waitForHostDelivery(1800);
+  if (!freeDesktop) {
+    queueHostState({ hostAlive: false, monitorExit: true, serial: ++sequence });
+    await waitForHostDelivery(1800);
+  }
   try { running.stdin.end(); } catch {}
   if (await waitForExit(running, 2500)) return;
   try { running.kill('SIGTERM'); } catch {}
@@ -229,6 +234,7 @@ async function stopChild() {
 }
 
 async function handleHostState(state) {
+  if (freeDesktop) return;
   hostState = state;
   hostState.serial = ++sequence;
   writeJson(followStateFile, {
@@ -251,7 +257,7 @@ function scheduleProbeRestart() {
 }
 
 function startProbe() {
-  if (stopping || probe) return;
+  if (freeDesktop || stopping || probe) return;
   const generation = ++probeGeneration;
   probeBuffer = '';
   lastProbeAt = Date.now();
@@ -301,32 +307,46 @@ function restartProbe(reason) {
 }
 
 function writeState() {
+  const heartbeatAt = new Date().toISOString();
   writeJson(stateFile, {
     pid: process.pid,
     parentPid: process.ppid,
     sessionId,
     installId: config.installId || null,
     startedAt,
-    heartbeatAt: new Date().toISOString(),
+    heartbeatAt,
     childPid: child?.pid || null,
     probePid: probe?.pid || null,
     hostPid: hostState.hostPid || null,
     hostAlive: !!hostState.hostAlive,
-    host: 'node-macos',
+    host: freeDesktop ? 'independent-desktop' : 'node-macos',
     platform: 'darwin',
+    mode: config.mode,
     pluginRoot,
   });
+  if (freeDesktop) {
+    writeJson(followStateFile, {
+      childPid: child?.pid || null,
+      state: { hostAlive: false, visible: true, attached: false, nativeFollowing: false, followMode: 'free-desktop' },
+      native: { enabled: false, mode: 'free-desktop' },
+      at: heartbeatAt,
+    });
+  }
 }
 
-startProbe();
+if (!freeDesktop) startProbe();
+startChild();
 writeState();
 
 heartbeat = setInterval(() => {
   if (stopping) return;
-  if (!probe) startProbe();
-  else if (Date.now() - lastProbeAt > 5000) restartProbe('no output for 5 seconds');
-  queueHostState(hostState);
-  if (hostState.hostAlive) startChild();
+  if (freeDesktop) startChild();
+  else {
+    if (!probe) startProbe();
+    else if (Date.now() - lastProbeAt > 5000) restartProbe('no output for 5 seconds');
+    queueHostState(hostState);
+    if (hostState.hostAlive) startChild();
+  }
   writeState();
 }, 500);
 heartbeat.unref?.();
@@ -349,4 +369,4 @@ process.on('SIGINT', () => { void shutdown('SIGINT').finally(() => process.exit(
 process.on('uncaughtException', error => log('uncaught exception: ' + error.stack));
 process.on('unhandledRejection', error => log('unhandled rejection: ' + String(error?.stack || error)));
 
-log('macOS supervisor started for ' + pluginRoot);
+log('macOS supervisor started for ' + pluginRoot + ' in ' + config.mode + ' mode');

@@ -5,6 +5,18 @@ const countFields = ['input_tokens', 'cached_input_tokens', 'cache_write_input_t
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const text = value => typeof value === 'string' ? value.slice(0, 500) : '';
 
+function safeRateWindow(value, expectedMinutes) {
+  const usedPercent = finite(value?.usedPercent), resetsAt = finite(value?.resetsAt);
+  if (usedPercent === null || resetsAt === null || value?.windowMinutes !== expectedMinutes) return null;
+  return { usedPercent: Math.max(0, Math.min(100, usedPercent)), windowMinutes: expectedMinutes, resetsAt };
+}
+
+function safeSubscriptionRateLimits(value) {
+  const observedAt = finite(value?.observedAt), fiveHour = safeRateWindow(value?.fiveHour, 300), sevenDay = safeRateWindow(value?.sevenDay, 10080);
+  if (observedAt === null || !fiveHour || !sevenDay) return null;
+  return { source: 'codex-session-rate-limits', observedAt, planType: text(value.planType).slice(0, 64), fiveHour, sevenDay };
+}
+
 export function safeUsage(value) {
   const result = {};
   for (const [model, counts] of Object.entries(value || {})) {
@@ -22,12 +34,15 @@ export function safeSample(value) {
 }
 
 export function safeTurn(meta) {
+  const subscriptionRateLimits = safeSubscriptionRateLimits(meta.subscriptionRateLimits);
   return { id: text(meta.id), sessionId: text(meta.sessionId), turnId: text(meta.turnId),
     rootTurnId: text(meta.rootTurnId || meta.turnId), parentThreadId: text(meta.parentThreadId),
+    modelProvider: text(meta.modelProvider).slice(0, 128),
     isSubagent: meta.isSubagent === true, partial: meta.partial === true, historical: meta.historical === true,
     startedAt: finite(meta.startedAt), ts: finite(meta.ts), byModel: safeUsage(meta.byModel),
     outcome: ['completed', 'failed', 'aborted', 'superseded', 'interrupted'].includes(meta.outcome) ? meta.outcome : null,
-    notify: meta.notify !== false, statusNotify: meta.statusNotify === true };
+    notify: meta.notify !== false, statusNotify: meta.statusNotify === true,
+    ...(subscriptionRateLimits ? { subscriptionRateLimits } : {}) };
 }
 
 function safePrices(models) {
@@ -45,7 +60,10 @@ function cleanEntry(entry) {
   if (!entry || !/^[a-f0-9]{24}$/.test(entry.accountId || '') || !/^[A-Z]{3}$/.test(entry.currency || '')) return null;
   const meta = safeTurn(entry.meta || {});
   if (!meta.id || !['active', 'settling', 'pending-cost'].includes(entry.stage)) return null;
-  return { stage: entry.stage, accountId: entry.accountId, currency: entry.currency,
+  const sourceId = entry.sourceId === undefined ? 'default' : text(entry.sourceId).slice(0, 64);
+  const sourceName = entry.sourceName === undefined ? '当前 API' : text(entry.sourceName).slice(0, 40);
+  if (!/^[a-z][a-z0-9_-]{0,63}$/.test(sourceId)) return null;
+  return { stage: entry.stage, accountId: entry.accountId, currency: entry.currency, sourceId, sourceName,
     pricing: safePrices(entry.pricing), meta, start: safeSample(entry.start),
     concurrent: entry.concurrent === true, dueAt: finite(entry.dueAt), scope: text(entry.scope) };
 }

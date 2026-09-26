@@ -9,10 +9,10 @@ export function pipeName(dataDir = DATA_HOME) {
   return process.platform === 'win32' ? '\\\\.\\pipe\\codex-whale-' + hash : path.join(dataDir, 'whale-' + hash + '.sock');
 }
 const ALLOWED = new Map([
-  ['/api/status', 'GET'], ['/dsh-whale/balance.json', 'GET'], ['/dsh-whale/usage-records.json', 'GET'], ['/api/show', 'POST'], ['/api/stop', 'POST'],
+  ['/api/status', 'GET'], ['/api/subscription-rate-limits', 'GET'], ['/dsh-whale/balance.json', 'GET'], ['/dsh-whale/usage-records.json', 'GET'], ['/api/show', 'POST'], ['/api/stop', 'POST'],
 ]);
 
-export async function startBridge(dispatcher, { dataDir = DATA_HOME, onHost = null } = {}) {
+export async function startBridge(dispatcher, { dataDir = DATA_HOME, onHost = null, onApprovalRequest = null } = {}) {
   const pipe = pipeName(dataDir), token = crypto.randomBytes(32).toString('hex'), instanceId = crypto.randomUUID();
   if (process.platform !== 'win32' && fs.existsSync(pipe)) {
     let stale = true;
@@ -45,6 +45,11 @@ export async function startBridge(dispatcher, { dataDir = DATA_HOME, onHost = nu
         if (candidate.length !== token.length || !crypto.timingSafeEqual(candidate, Buffer.from(token))) throw new Error('unauthorized');
         if (message.route === '/internal/host' && message.method === 'POST' && onHost) {
           await onHost(message.body);
+          if (!socket.destroyed) socket.end(JSON.stringify({ status: 200, payload: { ok: true } }) + '\n');
+          return;
+        }
+        if (message.route === '/internal/approval-request' && message.method === 'POST' && onApprovalRequest && message.body?.event === 'PermissionRequest') {
+          onApprovalRequest();
           if (!socket.destroyed) socket.end(JSON.stringify({ status: 200, payload: { ok: true } }) + '\n');
           return;
         }

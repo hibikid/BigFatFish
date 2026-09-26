@@ -25,6 +25,18 @@
     const at = typeof published === 'number' ? published : Date.parse(published);
     return !firstPoll || Number.isFinite(at) && at >= startedAt;
   }
+  function rateWindow(value, expectedMinutes) {
+    const remainingPercent = Number(value?.remainingPercent), usedPercent = Number(value?.usedPercent);
+    const resetsAt = typeof value?.resetsAt === 'string' && Number.isFinite(Date.parse(value.resetsAt)) ? value.resetsAt : null;
+    if (!Number.isFinite(remainingPercent) || !Number.isFinite(usedPercent) || value?.windowMinutes !== expectedMinutes || !resetsAt) return null;
+    return Object.freeze({ usedPercent: Math.max(0, Math.min(100, usedPercent)), remainingPercent: Math.max(0, Math.min(100, remainingPercent)),
+      windowMinutes: expectedMinutes, resetsAt });
+  }
+  function subscriptionRateLimits(value) {
+    const fiveHour = rateWindow(value?.fiveHour, 300), sevenDay = rateWindow(value?.sevenDay, 10080);
+    if (!fiveHour || !sevenDay) return null;
+    return Object.freeze({ planType: typeof value.planType === 'string' ? value.planType.slice(0, 64) : '', fiveHour, sevenDay });
+  }
   function snapshot(record, nativeCurrency = 'USD') {
     const completionKind = kind(record);
     const known = record.amount !== null && record.amount !== undefined && Number.isFinite(Number(record.amount)) &&
@@ -37,6 +49,7 @@
       costState: known ? record.costState || 'observed' : record.costState === 'pending' ? 'pending' : 'unknown',
       tokens: Number.isFinite(record.tokens) && record.tokens >= 0 ? Math.floor(record.tokens) : null,
       note: String(record.note || ''),
+      subscriptionRateLimits: subscriptionRateLimits(record.subscriptionRateLimits),
     });
   }
   function enabled(notice, settings, turnCostOn) {

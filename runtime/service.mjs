@@ -6,6 +6,40 @@ import { UsageLedger, usageDefaults } from './ledger.mjs';
 import { readJson, writeJson, rounded } from './paths.mjs';
 import { TurnJournal, safeSample, safeTurn, safeUsage } from './turn-journal.mjs';
 
+function subscriptionWindow(value, expectedMinutes) {
+  if (['usedPercent', 'windowMinutes', 'resetsAt'].some(key => typeof value?.[key] !== 'number')) return null;
+  const usedPercent = Number(value?.usedPercent), windowMinutes = Number(value?.windowMinutes), resetsAt = Number(value?.resetsAt);
+  if (!Number.isFinite(usedPercent) || windowMinutes !== expectedMinutes || !Number.isFinite(resetsAt)) return null;
+  return { usedPercent: Math.max(0, Math.min(100, usedPercent)), windowMinutes, resetsAt };
+}
+
+function safeSubscriptionRateLimits(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const fiveHour = subscriptionWindow(value.fiveHour, 300), sevenDay = subscriptionWindow(value.sevenDay, 10080);
+  const observedAt = Number(value.observedAt);
+  if (!fiveHour || !sevenDay || !Number.isFinite(observedAt)) return null;
+  return { source: 'codex-session-rate-limits', observedAt,
+    planType: typeof value.planType === 'string' ? value.planType.slice(0, 64) : '', fiveHour, sevenDay };
+}
+
+function publicQuota(window) {
+  return { usedPercent: window.usedPercent, remainingPercent: Math.max(0, Math.min(100, 100 - window.usedPercent)),
+    windowMinutes: window.windowMinutes, resetsAt: new Date(window.resetsAt).toISOString() };
+}
+
+function publicSubscriptionRateLimits(value, now = Date.now()) {
+  const snapshot = safeSubscriptionRateLimits(value);
+  if (!snapshot || snapshot.fiveHour.resetsAt <= now || snapshot.sevenDay.resetsAt <= now) return null;
+  return { planType: snapshot.planType, observedAt: new Date(snapshot.observedAt).toISOString(),
+    fiveHour: publicQuota(snapshot.fiveHour), sevenDay: publicQuota(snapshot.sevenDay) };
+}
+
+function safeSubscriptionRateLimitContext(value) {
+  const observedAt = Number(value?.observedAt);
+  if (!Number.isFinite(observedAt) || typeof value?.usesSubscription !== 'boolean') return null;
+  return { observedAt, usesSubscription: value.usesSubscription };
+}
+
 export class WhaleService {
   constructor(options = {}) {
     this.config = options.config || new ConfigStore(options);
@@ -15,7 +49,11 @@ export class WhaleService {
     this.balanceSequence = 0; this.latestSamples = new Map(); this.latestQueries = new Map();
     this.lastFile = path.join(this.config.dataDir, 'last-turn.json');
     this.usageSettingsFile = path.join(this.config.dataDir, 'usage-settings.json');
-    this.activeScope = null;
+    this.subscriptionRateLimitsFile = path.join(this.config.dataDir, 'subscription-rate-limits.json');
+    this.subscriptionRateLimitsCache = safeSubscriptionRateLimits(readJson(this.subscriptionRateLimitsFile, null));
+    this.subscriptionRateLimitContextFile = path.join(this.config.dataDir, 'subscription-rate-limit-context.json');
+    this.subscriptionRateLimitContext = safeSubscriptionRateLimitContext(readJson(this.subscriptionRateLimitContextFile, null));
+    this.activeScope = null; this.displaySourceId = '';
     this.journal = new TurnJournal(this.config.dataDir);
     this.jobs = new Set(); this.noticeTimers = new Map(); this.latestStarts = new Map(); this.pendingCosts = new Map();
     this.noticeDelayMs = options.noticeDelayMs ?? 2500; this.pendingCostMs = options.pendingCostMs ?? 30000;
@@ -30,8 +68,21 @@ export class WhaleService {
     return JSON.stringify([c.accountId, s.provider, s.currency, s.balancePath, s.balanceField,
       s.usedField, s.balanceScale, s.billingUsageDivisor, s.quotaPerUnit]);
   }
-  isCurrentBalanceContext(c) {
-    try { return this.balanceIdentity(c) === this.balanceIdentity(this.config.resolve()); }
+  displayContext() {
+    let sourceId = this.displaySourceId;
+    if (!sourceId) {
+      try { sourceId = this.lastTurn().sourceId || ''; } catch {}
+    }
+    if (sourceId && sourceId !== 'default') {
+      try {
+        const entry = this.config.configuredSources().find(item => item.context?.sourceId === sourceId);
+        if (entry?.context) return entry.context;
+      } catch {}
+    }
+    return this.config.resolve();
+  }
+  isDisplayBalanceContext(c) {
+    try { return this.balanceIdentity(c) === this.balanceIdentity(this.displayContext()); }
     catch { return false; }
   }
   newestBalanceSample(c, currency) {
@@ -47,10 +98,40 @@ export class WhaleService {
     return latest.identity === this.balanceIdentity(c) ? latest : null;
   }
   stoppedBalance() { return { ok: false, code: 'STOPPED', error: '挂件正在退出，余额将在下次启动时刷新' }; }
+  updateSubscriptionRateLimits(snapshot) {
+    const next = safeSubscriptionRateLimits(snapshot);
+    if (!next) return false;
+    const previous = this.subscriptionRateLimitsCache;
+    if (previous && next.observedAt < previous.observedAt) return false;
+    this.subscriptionRateLimitsCache = next;
+    try { writeJson(this.subscriptionRateLimitsFile, next); } catch {}
+    return true;
+  }
+  updateSubscriptionRateLimitContext(context) {
+    const next = safeSubscriptionRateLimitContext(context);
+    if (!next) return false;
+    const previous = this.subscriptionRateLimitContext;
+    if (previous && next.observedAt < previous.observedAt) return false;
+    this.subscriptionRateLimitContext = next;
+    try { writeJson(this.subscriptionRateLimitContextFile, next); } catch {}
+    return true;
+  }
+  subscriptionRateLimits() {
+    const snapshot = safeSubscriptionRateLimits(this.subscriptionRateLimitsCache);
+    // Once either rolling window has reset, the old percentage is no longer
+    // truthful. The next Codex App token event supplies a fresh snapshot.
+    const context = safeSubscriptionRateLimitContext(this.subscriptionRateLimitContext);
+    if (!snapshot || !context?.usesSubscription || context.observedAt < snapshot.observedAt ||
+      snapshot.fiveHour.resetsAt <= Date.now() || snapshot.sevenDay.resetsAt <= Date.now()) {
+      return { ok: true, available: false };
+    }
+    return { ok: true, available: true, source: snapshot.source, planType: snapshot.planType,
+      observedAt: new Date(snapshot.observedAt).toISOString(), fiveHour: publicQuota(snapshot.fiveHour), sevenDay: publicQuota(snapshot.sevenDay) };
+  }
   async getBalance({ force = false, context = null } = {}) {
     if (this.closed) return this.stoppedBalance();
     let c;
-    try { c = context || this.config.resolve(); }
+    try { c = context || this.displayContext(); }
     catch (error) { return { ok: false, code: 'CONFIG', error: error.message }; }
     const cacheKey = c.accountId + ':' + JSON.stringify(c.setting);
     const identity = this.balanceIdentity(c), cached = this.balanceCache(c, cacheKey);
@@ -59,7 +140,7 @@ export class WhaleService {
     const deliver = value => {
       if (this.closed) return this.stoppedBalance();
       if (!context) {
-        if (!this.isCurrentBalanceContext(c)) return this.getBalance();
+        if (!this.isDisplayBalanceContext(c)) return this.getBalance();
         if (value.superseded) {
           const latest = this.newestBalanceSample(c, value.currency);
           return latest?.identity === identity ? this.decorate(c, latest.payload) : this.getBalance({ force: true });
@@ -76,7 +157,7 @@ export class WhaleService {
         if (this.closed) return this.stoppedBalance();
         const scope = this.scope(c, payload.currency);
         const latest = this.newestBalanceSample(c, payload.currency);
-        if (latest && (sequence < latest.sequence || latest.identity !== identity && !this.isCurrentBalanceContext(c))) {
+        if (latest && (sequence < latest.sequence || latest.identity !== identity && !this.isDisplayBalanceContext(c))) {
           // Keep the actual request's sample for a round's interval; replacing
           // its end with a newer sample could include another task's debit.
           // UI callers receive the latest compatible sample in deliver().
@@ -103,13 +184,17 @@ export class WhaleService {
   decorate(c, payload, { activate = true } = {}) {
     const scope = this.scope(c, payload.currency);
     const records = this.ledger.records(scope);
-    if (activate && this.isCurrentBalanceContext(c)) this.activeScope = scope;
-    return { ...payload, todayUsage: records.today.total, observedSince: records.today.since, usageMode: 'ledger', usageNote: records.note };
+    if (activate && this.isDisplayBalanceContext(c)) this.activeScope = scope;
+    const sourceDailyUsage = Number.isFinite(payload.sourceDailyUsage) ? payload.sourceDailyUsage : null;
+    return { ...payload, todayUsage: sourceDailyUsage === null ? records.today.total : sourceDailyUsage,
+      todayUsageSource: sourceDailyUsage === null ? 'ledger' : 'source-api', observedSince: records.today.since,
+      usageMode: sourceDailyUsage === null ? 'ledger' : 'source-api', usageNote: records.note };
   }
   usageRecords() {
-    const c = this.config.resolve();
+    const c = this.displayContext();
     const scope = this.activeScope?.startsWith(c.accountId + '-') ? this.activeScope : this.scope(c, c.setting.currency);
-    return { ...this.ledger.records(scope), currency: scope.slice(-3), settings: this.readUsageSettings() };
+    return { ...this.ledger.records(scope), currency: scope.slice(-3), settings: this.readUsageSettings(),
+      overall: this.ledger.recordsAll(this.config.sourcePublicInfo(c.setting)) };
   }
   readUsageSettings() {
     const saved = readJson(this.usageSettingsFile, {});
@@ -127,17 +212,15 @@ export class WhaleService {
     return { ok: true, settings: result };
   }
   lastTurn() {
-    const last = readJson(this.lastFile, { ok: true, seq: 0, turn: null, amount: null, tokens: null, ts: null });
-    const c = this.config.resolve();
-    if (last.accountId && last.accountId !== c.accountId) return { ok: true, seq: last.seq, turn: null, amount: null, tokens: null, ts: null };
-    return last;
+    return readJson(this.lastFile, { ok: true, seq: 0, turn: null, amount: null, tokens: null, ts: null });
   }
   beginTurn(meta) {
     if (this.closed || this.settling.has(meta.id)) return;
     if (this.turns.has(meta.id)) { this.updateTurn(meta); return; }
     let context;
-    try { context = this.config.resolve(); } catch { return; }
+    try { context = this.config.resolveForSession(meta); } catch { return; }
     if (!meta.isSubagent) {
+      this.displaySourceId = context.sourceId || 'default';
       const session = meta.sessionId || meta.id;
       this.latestStarts.set(session, meta.id);
       const waiting = this.noticeTimers.get(session);
@@ -162,11 +245,13 @@ export class WhaleService {
     turn.byModel = safeUsage(meta.byModel || turn.byModel);
     if (meta.rootTurnId) turn.rootTurnId = meta.rootTurnId;
     if (meta.ts) turn.ts = meta.ts;
+    if (safeSubscriptionRateLimits(meta.subscriptionRateLimits)) turn.subscriptionRateLimits = meta.subscriptionRateLimits;
     this.persistTurn(turn, 'active');
   }
   persistTurn(turn, stage, meta = turn, extra = {}) {
     if (this.closed) return;
     this.journal.put({ stage, accountId: turn.context.accountId, currency: turn.context.setting.currency,
+      sourceId: turn.context.sourceId || 'default', sourceName: turn.context.sourceName || '当前 API',
       pricing: turn.context.setting.models, meta: { ...meta, partial: !!turn.partial }, start: turn.startSample,
       concurrent: !!turn.concurrent, ...extra });
   }
@@ -177,8 +262,12 @@ export class WhaleService {
     try { current = this.config.resolve(); } catch {}
     const waiting = [];
     for (const saved of this.journal.list()) {
-      const matches = current?.accountId === saved.accountId && current.setting.currency === saved.currency;
-      const context = matches ? { ...current, setting: { ...current.setting, models: saved.pricing } } :
+      let source;
+      try {
+        source = saved.sourceId && saved.sourceId !== 'default' ? this.config.configuredSources().find(item => item.context?.sourceId === saved.sourceId)?.context : current;
+      } catch {}
+      const matches = source?.accountId === saved.accountId && source.setting.currency === saved.currency;
+      const context = matches ? { ...source, setting: { ...source.setting, models: saved.pricing } } :
         { accountId: saved.accountId, model: '', setting: { currency: saved.currency, models: saved.pricing } };
       const turn = { ...saved.meta, context, canQuery: matches, startSample: saved.start,
         start: Promise.resolve(saved.start || { ok: false }), concurrent: saved.concurrent };
@@ -189,6 +278,7 @@ export class WhaleService {
         continue;
       }
       this.turns.set(saved.meta.id, turn);
+      if (!saved.meta.isSubagent && matches) this.displaySourceId = context.sourceId || 'default';
       if (saved.stage === 'settling') waiting.push(saved.meta);
       else this.recoveryActive.add(saved.meta.id);
     }
@@ -218,9 +308,12 @@ export class WhaleService {
     const context = turn.context;
     const outcome = meta.outcome || 'completed';
     const ownUsage = safeUsage(meta.byModel || turn.byModel);
+    const subscriptionRateLimits = publicSubscriptionRateLimits(meta.subscriptionRateLimits);
     const base = { id: meta.id, sessionId: meta.sessionId || turn.sessionId, turnId: meta.turnId,
       rootTurnId: meta.rootTurnId || turn.rootTurnId || meta.turnId, ts: meta.ts || Date.now(), outcome,
-      partial: !!turn.partial, historical: !!meta.historical, accountId: context.accountId };
+      partial: !!turn.partial, historical: !!meta.historical, accountId: context.accountId,
+      sourceId: context.sourceId || 'default', sourceName: context.sourceName || '当前 API',
+      ...(subscriptionRateLimits ? { subscriptionRateLimits } : {}) };
     if (turn.isSubagent || meta.isSubagent) {
       const estimate = !turn.partial ? estimateUsage(ownUsage, context.setting, base.ts) : null;
       const scope = this.scope(context, context.setting.currency);
@@ -350,9 +443,6 @@ export class WhaleService {
   publishNotice(scope, id) {
     const event = this.ledger.find(scope, { id });
     if (!event || event.noticePublished || !event.notify || this.closed) return;
-    let config;
-    try { config = this.config.resolve(); } catch { return; }
-    if (config.accountId !== event.accountId) return;
     const settings = this.readUsageSettings().outcomeNotice;
     if (event.completionKind === 'failed' && !settings.failed || event.completionKind === 'cancelled' && !settings.cancelled) return;
     const seq = Number(readJson(this.lastFile, { seq: 0 }).seq || 0) + 1;

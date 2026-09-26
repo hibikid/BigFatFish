@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { DATA_HOME, ROOT } from '../runtime/paths.mjs';
+import { installApprovalHook } from './manage-approval-hook.mjs';
 
 if (process.platform !== 'darwin') {
   process.stderr.write('This installer is only for macOS.\n');
@@ -13,13 +14,10 @@ if (process.platform !== 'darwin') {
 const label = 'com.api-balance-whale.codex';
 const launchAgents = path.join(os.homedir(), 'Library', 'LaunchAgents');
 const plistPath = path.join(launchAgents, label + '.plist');
-const nativeDir = path.join(DATA_HOME, 'native');
-const probePath = path.join(nativeDir, 'whale-window-probe');
 const electronApp = path.join(DATA_HOME, 'desktop-runtime', 'node_modules', 'electron', 'dist', 'Electron.app');
 const electronPath = path.join(electronApp, 'Contents', 'MacOS', 'Electron');
 const desktopBundleID = 'com.api-balance-whale.codex.desktop';
 const supervisorPath = path.join(ROOT, 'desktop', 'macos', 'supervisor.mjs');
-const probeSource = path.join(ROOT, 'desktop', 'macos', 'window-probe.swift');
 const homebrewNode = ['/opt/homebrew/bin/node', '/usr/local/bin/node'].find(file => fs.existsSync(file));
 const nodePath = homebrewNode || process.execPath;
 const installId = randomUUID();
@@ -53,19 +51,6 @@ function prepareElectronBundle() {
   run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', electronApp]);
   const stale = path.join(os.homedir(), 'Library', 'Saved Application State', desktopBundleID + '.savedState');
   try { fs.rmSync(stale, { recursive: true, force: true }); } catch {}
-}
-
-function compileProbe() {
-  fs.mkdirSync(nativeDir, { recursive: true });
-  const temporary = probePath + '.tmp';
-  const cache = path.join(nativeDir, 'swift-cache');
-  fs.mkdirSync(cache, { recursive: true });
-  run('/usr/bin/xcrun', ['swiftc', '-O', '-framework', 'AppKit', '-framework', 'CoreGraphics', '-o', temporary, probeSource], {
-    env: { ...process.env, CLANG_MODULE_CACHE_PATH: cache, SWIFT_MODULECACHE_PATH: cache },
-  });
-  run('/usr/bin/codesign', ['--force', '--sign', '-', temporary]);
-  fs.renameSync(temporary, probePath);
-  fs.chmodSync(probePath, 0o755);
 }
 
 function xml(value) {
@@ -142,22 +127,19 @@ async function reloadLaunchAgent() {
 
 installDesktopIfNeeded();
 prepareElectronBundle();
-compileProbe();
 writeLaunchAgent();
 
 const config = {
   platform: 'darwin',
   enabled: true,
-  mode: 'follow-codex',
-  revision: 'macos-v1',
+  mode: 'free-desktop',
+  revision: 'macos-v2-free-desktop',
   installId,
   label,
   pluginRoot: ROOT,
   nodePath,
   electronPath,
-  probePath,
   launchAgentPath: plistPath,
-  bundleId: process.env.WHALE_CODEX_BUNDLE_ID || 'com.openai.codex',
 };
 fs.writeFileSync(path.join(DATA_HOME, 'follow-config.json'), JSON.stringify(config, null, 2));
 fs.writeFileSync(path.join(DATA_HOME, 'follow-install.json'), JSON.stringify({
@@ -170,7 +152,10 @@ try { fs.unlinkSync(path.join(DATA_HOME, 'supervisor-state.json')); } catch (err
 await reloadLaunchAgent();
 
 let verified = false;
-for (let attempt = 0; attempt < 30; attempt++) {
+// A first Electron launch can take longer than the old six-second window while
+// macOS validates the freshly signed bundle. Wait long enough to distinguish a
+// genuinely failed LaunchAgent from a healthy cold start.
+for (let attempt = 0; attempt < 75; attempt++) {
   const state = (() => {
     try { return JSON.parse(fs.readFileSync(path.join(DATA_HOME, 'supervisor-state.json'), 'utf8')); } catch { return null; }
   })();
@@ -187,5 +172,8 @@ if (!verified) {
   throw new Error('LaunchAgent was installed, but the supervisor did not report ready. See macos-launchagent-error.log.');
 }
 
-process.stdout.write('macOS desktop component and automatic following are installed.\n');
-process.stdout.write('Open the Codex desktop app; the whale will appear when a Codex window is available.\n');
+installApprovalHook({ nodePath });
+
+process.stdout.write('macOS desktop component is installed in free-desktop mode.\n');
+process.stdout.write('The whale starts independently of Codex and can be shown or hidden from the tray or Cmd+Option+W.\n');
+process.stdout.write('Approval reminder hook installed. Review and trust it with /hooks in Codex.\n');

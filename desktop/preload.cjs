@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('whaleDesktop', {
   testMode: process.argv.includes('--whale-render-test'),
 });
 ipcRenderer.on('whale-settings', () => window.dispatchEvent(new Event('whale-open-settings')));
+ipcRenderer.on('whale-approval-request', () => window.dispatchEvent(new Event('whale-approval-request')));
 ipcRenderer.on('whale-command', (_event, command) => {
   const events = {
     balance: 'whale-refresh',

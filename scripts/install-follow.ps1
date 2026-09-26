@@ -86,7 +86,7 @@ $whaleAction = New-ScheduledTaskAction -Execute $whaleLauncher -Argument $whaleA
 $whalePrincipal = New-ScheduledTaskPrincipal -UserId $whaleUser -LogonType Interactive -RunLevel Limited
 $whaleSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval ([TimeSpan]::FromMinutes(1)) -StartWhenAvailable
 if ($NoStartup) { $whaleTask = New-ScheduledTask -Action $whaleAction -Principal $whalePrincipal -Settings $whaleSettings -Description 'Per-user Codex balance companion. No web server.' }
-else { $whaleTrigger = New-ScheduledTaskTrigger -AtLogOn -User $whaleUser; $whaleTask = New-ScheduledTask -Action $whaleAction -Trigger $whaleTrigger -Principal $whalePrincipal -Settings $whaleSettings -Description 'Per-user Codex balance companion. Starts independently of Codex and follows its windows.' }
+else { $whaleTrigger = New-ScheduledTaskTrigger -AtLogOn -User $whaleUser; $whaleTask = New-ScheduledTask -Action $whaleAction -Trigger $whaleTrigger -Principal $whalePrincipal -Settings $whaleSettings -Description 'Per-user API balance desktop companion. Runs independently of Codex.' }
 # Register and verify before stopping a usable monitor. A failed registration
 # must not turn a working companion into a missing one or write a success receipt.
 try {
@@ -116,7 +116,7 @@ for ($whaleAttempt=0; $whaleAttempt -lt 60; $whaleAttempt++) {
     Start-Sleep -Milliseconds 200
 }
 if ((Get-ScheduledTask -TaskName $whaleTaskName -ErrorAction Stop).State -eq 'Running') { Stop-ScheduledTask -TaskName $whaleTaskName -ErrorAction Stop }
-@{ enabled=$true; pluginRoot=$whaleRoot; electronPath=$whaleElectron; powerShellPath=$whalePowerShell; launcherPath=$whaleLauncher; taskName=$whaleTaskName; mode='follow-codex'; revision='follow-v3'; launchMode='winexe-create-no-window' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $DataDir 'follow-config.json') -Encoding utf8
+@{ enabled=$true; pluginRoot=$whaleRoot; electronPath=$whaleElectron; powerShellPath=$whalePowerShell; launcherPath=$whaleLauncher; taskName=$whaleTaskName; mode='free-desktop'; revision='desktop-v4-free'; launchMode='winexe-create-no-window' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $DataDir 'follow-config.json') -Encoding utf8
 $whaleStartup = Join-Path ([Environment]::GetFolderPath('Startup')) 'Codex API Balance Whale.lnk'
 if (Test-Path -LiteralPath $whaleStartup) {
     $whaleShell = New-Object -ComObject WScript.Shell
@@ -141,4 +141,4 @@ if (!$NoStart) {
     if (!$whaleStarted) { throw 'The GUI task was registered, but its monitor did not start correctly. No successful installation was recorded. Check Windows Task Scheduler or launcher-error.json.' }
 }
 @{ taskName=$whaleTaskName; hostPath=$whaleLauncher; workerPath=$whalePowerShell; pluginRoot=$whaleRoot; runLevel='Limited'; user=$whaleUser; launchMode='WinExe'; verifiedTask=$true; started=(!$NoStart); installedAt=[DateTime]::UtcNow.ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $DataDir 'follow-install.json') -Encoding utf8
-Write-Output 'Codex companion installed with an independent GUI launcher. No terminal window; local IPC.'
+Write-Output 'Desktop companion installed with an independent GUI launcher. No terminal window; local IPC.'

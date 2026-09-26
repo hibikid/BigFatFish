@@ -9,8 +9,16 @@
   const keyboardSurfaces = 'dialog[open],.dshwv-menu,.dshwv-rolelist,.dshwv-audiolist,[class*="mask"],.dshwv-qedit,.dshwv-usagepanel,.dshwv-custmenu';
   function visible(el) { return el.checkVisibility({ opacityProperty: true, visibilityProperty: true }); }
   function contains(el, p) { const r = el.getBoundingClientRect(); return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom; }
+  function menuCapturesOutsideClick() {
+    // The native desktop window normally passes transparent pixels through.
+    // While the main menu is open, keep the whole window interactive for one
+    // outside click so the widget's existing document handler can close it.
+    return [...document.querySelectorAll('.dshwv-menu.dshwv-menu-open')].some(el =>
+      getComputedStyle(el).pointerEvents !== 'none');
+  }
   function hit(p) {
     if ([...document.querySelectorAll('dialog[open]')].some(visible)) return true;
+    if (menuCapturesOutsideClick()) return true;
     for (const el of document.querySelectorAll(surfaces)) if (visible(el) && contains(el, p)) return true;
     const target = document.elementFromPoint(p.x, p.y);
     if (target?.closest('.dshwv-pop-open') && !target.closest('[inert]')) return true;

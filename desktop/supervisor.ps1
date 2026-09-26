@@ -47,21 +47,22 @@ try {
     while (!$whaleStop.WaitOne(100)) {
         $whaleNow = [DateTime]::UtcNow
         $whaleState = [WhaleWindows]::Probe()
+        $whaleConfig = Read-WhaleJson (Join-Path $DataDir 'follow-config.json')
+        $whaleFreeDesktop = $whaleConfig.mode -eq 'free-desktop'
         if ($whaleChild -and $whaleChild.HasExited) { [WhaleWindows]::StopFollowing(); $whaleChild.Dispose(); $whaleChild = $null; $whaleOverlay='0'; $whaleOwner='0'; $whaleLastMessage='' }
-        if (!$whaleChild -and $whaleState.hostAlive -and ($whaleNow - $whaleLastLaunch).TotalSeconds -gt 4) {
-            $whaleConfig = Read-WhaleJson (Join-Path $DataDir 'follow-config.json')
+        if (!$whaleChild -and ($whaleFreeDesktop -or $whaleState.hostAlive) -and ($whaleNow - $whaleLastLaunch).TotalSeconds -gt 4) {
             $whalePause = Read-WhaleJson (Join-Path $DataDir 'pause-until-host-exit.json')
-            if ($whaleConfig.enabled -eq $false -or [string]$whalePause.hostPid -eq [string]$whaleState.hostPid) { continue }
+            if ($whaleConfig.enabled -eq $false -or $whalePause.pauseAll -eq $true -or (!$whaleFreeDesktop -and [string]$whalePause.hostPid -eq [string]$whaleState.hostPid)) { continue }
             if (!(Test-Path -LiteralPath $whaleConfig.electronPath)) { throw 'Desktop runtime is missing.' }
             $whaleMain = Join-Path $whaleConfig.pluginRoot 'desktop\main.cjs'
             $whaleStart = [Diagnostics.ProcessStartInfo]::new()
             $whaleStart.FileName = $whaleConfig.electronPath
-            $whaleStart.Arguments = '"' + $whaleMain + '" "--whale-data=' + $DataDir + '" --supervised'
+            $whaleStart.Arguments = '"' + $whaleMain + '" "--whale-data=' + $DataDir + '" --supervised' + $(if ($whaleFreeDesktop) { ' --free-desktop' } else { '' })
             $whaleStart.WorkingDirectory = $whaleConfig.pluginRoot
             $whaleStart.UseShellExecute=$false; $whaleStart.CreateNoWindow=$true
             $whaleStart.RedirectStandardInput=$true; $whaleStart.RedirectStandardOutput=$true; $whaleStart.RedirectStandardError=$true
             $whaleStart.EnvironmentVariables.Remove('ELECTRON_RUN_AS_NODE')
-            $whaleStart.EnvironmentVariables['WHALE_INITIAL_HOST'] = ($whaleState | ConvertTo-Json -Depth 5 -Compress)
+            if (!$whaleFreeDesktop) { $whaleStart.EnvironmentVariables['WHALE_INITIAL_HOST'] = ($whaleState | ConvertTo-Json -Depth 5 -Compress) }
             $whaleStart.EnvironmentVariables['WHALE_LAUNCH_TIME'] = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString()
             $whaleChild = [Diagnostics.Process]::new(); $whaleChild.StartInfo=$whaleStart
             [void]$whaleChild.Start(); $whaleLastLaunch=$whaleNow
@@ -72,7 +73,7 @@ try {
                 try { $whaleLine=$whaleOutput.GetAwaiter().GetResult(); if ($whaleLine) { $whaleResponse=$whaleLine | ConvertFrom-Json; if ($whaleResponse.overlayHandle) { $whaleOverlay=[string]$whaleResponse.overlayHandle } } } catch { }
                 $whaleOutput=$whaleChild.StandardOutput.ReadLineAsync()
             }
-            if ($whaleState.window -eq '0') {
+            if (!$whaleFreeDesktop -and $whaleState.window -eq '0') {
                 # A minimize, a transient DWM cloak or a window-handle swap can
                 # make one probe sample choose nothing, and the owner binding is
                 # never re-derived from a zero handle. Reuse the last verified
@@ -80,19 +81,20 @@ try {
                 # still comes from this sample, so a minimized host keeps hiding
                 # the widget while the binding stays intact for the restore.
                 if ($whaleOwner -ne '0') { $whaleState['window'] = $whaleOwner }
-            } elseif ($whaleOverlay -ne '0' -and $whaleOwner -ne $whaleState.window) {
+            } elseif (!$whaleFreeDesktop -and $whaleOverlay -ne '0' -and $whaleOwner -ne $whaleState.window) {
                 if ([WhaleWindows]::Attach([long]$whaleOverlay, [long]$whaleState.window)) { $whaleOwner=[string]$whaleState.window }
             }
-            $whaleState['attached'] = ($whaleOwner -ne '0' -and $whaleOwner -eq $whaleState.window)
-            $whaleState['nativeFollowing'] = [WhaleWindows]::IsFollowing()
+            $whaleState['attached'] = if ($whaleFreeDesktop) { $false } else { ($whaleOwner -ne '0' -and $whaleOwner -eq $whaleState.window) }
+            $whaleState['nativeFollowing'] = if ($whaleFreeDesktop) { $false } else { [WhaleWindows]::IsFollowing() }
             # Bounds belong to the native follower. Only lifecycle changes and
             # a one-second heartbeat use IPC/disk; there is no per-move I/O.
-            $whaleMessage = if ($whaleState.nativeFollowing) { @($whaleState.hostAlive,$whaleState.hostPid,$whaleState.window,$whaleState.visible,$whaleState.attached,$whaleState.dpi,$whaleState.bounds.width,$whaleState.bounds.height,'native') -join '|' } else { $whaleState | ConvertTo-Json -Depth 5 -Compress }
+            $whaleMessage = if ($whaleFreeDesktop) { 'free-desktop' } elseif ($whaleState.nativeFollowing) { @($whaleState.hostAlive,$whaleState.hostPid,$whaleState.window,$whaleState.visible,$whaleState.attached,$whaleState.dpi,$whaleState.bounds.width,$whaleState.bounds.height,'native') -join '|' } else { $whaleState | ConvertTo-Json -Depth 5 -Compress }
             if ($whaleMessage -ne $whaleLastMessage -or ($whaleNow - $whaleHeartbeat).TotalSeconds -ge 1) {
                 try {
                     $whaleSequence++; $whaleState['serial'] = $whaleSequence
-                    if (Send-WhaleHost $whaleState) {
-                        @{ childPid=$whaleChild.Id; state=$whaleState; native=[WhaleWindows]::FollowMetrics(); at=$whaleNow.ToString('o') } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $DataDir 'follow-state.json') -Encoding utf8
+                    if ($whaleFreeDesktop -or (Send-WhaleHost $whaleState)) {
+                        $whaleNative = if ($whaleFreeDesktop) { @{ enabled=$false; mode='free-desktop' } } else { [WhaleWindows]::FollowMetrics() }
+                        @{ childPid=$whaleChild.Id; state=$whaleState; native=$whaleNative; at=$whaleNow.ToString('o') } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $DataDir 'follow-state.json') -Encoding utf8
                         $whaleLastMessage=$whaleMessage; $whaleHeartbeat=$whaleNow
                     }
                 } catch { @{ message=$_.Exception.Message; at=$whaleNow.ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $DataDir 'follow-input-error.json') -Encoding utf8 }

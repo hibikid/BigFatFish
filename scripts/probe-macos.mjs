@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { DATA_HOME } from '../runtime/paths.mjs';
 
 if (process.platform !== 'darwin') {
@@ -8,18 +7,17 @@ if (process.platform !== 'darwin') {
   process.exit(1);
 }
 
-const probe = path.join(DATA_HOME, 'native', 'whale-window-probe');
-if (!fs.existsSync(probe)) {
-  process.stderr.write('Window probe is not installed. Run scripts/install-macos.mjs first.\n');
+const configFile = path.join(DATA_HOME, 'follow-config.json');
+let config = {};
+try {
+  config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+} catch {}
+if (config.platform !== 'darwin' || config.enabled !== true || config.mode !== 'free-desktop') {
+  process.stderr.write('Free-desktop mode is not installed. Run scripts/install-macos.mjs first.\n');
   process.exit(1);
 }
-let configuredBundle = '';
-try {
-  configuredBundle = JSON.parse(fs.readFileSync(path.join(DATA_HOME, 'follow-config.json'), 'utf8')).bundleId || '';
-} catch {}
-const result = spawnSync(probe, ['--once', '--bundle-id', process.env.WHALE_CODEX_BUNDLE_ID || configuredBundle || 'com.openai.codex'], { encoding: 'utf8' });
-if (result.status !== 0) {
-  process.stderr.write(result.stderr || 'Window probe failed.\n');
-  process.exit(result.status || 1);
+if (!config.electronPath || !fs.existsSync(config.electronPath)) {
+  process.stderr.write('Desktop runtime is missing. Run scripts/install-macos.mjs first.\n');
+  process.exit(1);
 }
-process.stdout.write(result.stdout);
+process.stdout.write(JSON.stringify({ ok: true, platform: 'darwin', mode: config.mode, electronPath: config.electronPath }) + '\n');

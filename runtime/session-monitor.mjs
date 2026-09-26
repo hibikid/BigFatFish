@@ -9,13 +9,36 @@ const zero = () => normalize({});
 const relevant = /"(?:session_meta|token_count|turn_context|task_started|task_complete|turn_started|turn_completed|turn_aborted|task_aborted)"/;
 const timestamp = value => typeof value === 'number' ? (value < 1e12 ? value * 1000 : value) : Date.parse(value);
 
+// Codex writes this snapshot alongside token_count events. Keep only the two
+// rolling Codex subscription windows; account and authentication data never
+// leave the session log or get persisted by the widget.
+function rateWindow(value) {
+  const rawUsed = value?.used_percent ?? value?.usedPercent;
+  if (typeof rawUsed !== 'number' && (typeof rawUsed !== 'string' || !rawUsed.trim())) return null;
+  const usedPercent = Number(rawUsed);
+  const windowMinutes = Number(value?.window_minutes ?? value?.windowDurationMins);
+  const resetsAt = timestamp(value?.resets_at ?? value?.resetsAt);
+  if (!Number.isFinite(usedPercent) || !Number.isSafeInteger(windowMinutes) || windowMinutes <= 0 || !Number.isFinite(resetsAt)) return null;
+  return { usedPercent: Math.max(0, Math.min(100, usedPercent)), windowMinutes, resetsAt };
+}
+
+export function normalizeSubscriptionRateLimits(value, observedAt = Date.now()) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.limit_id !== 'codex') return null;
+  const fiveHour = rateWindow(value.primary), sevenDay = rateWindow(value.secondary);
+  if (!fiveHour || !sevenDay || fiveHour.windowMinutes !== 300 || sevenDay.windowMinutes !== 10080) return null;
+  const at = Number(observedAt);
+  if (!Number.isFinite(at)) return null;
+  return { source: 'codex-session-rate-limits', observedAt: at,
+    planType: typeof value.plan_type === 'string' ? value.plan_type.slice(0, 64) : '', fiveHour, sevenDay };
+}
+
 export class SessionParser {
-  constructor({ id, defaultModel = '', onStart = () => {}, onEnd = () => {}, onUpdate = () => {}, recoverIds = [] }) {
+  constructor({ id, defaultModel = '', onStart = () => {}, onEnd = () => {}, onUpdate = () => {}, onRateLimits = () => {}, onRateLimitContext = () => {}, recoverIds = [] }) {
     this.id = id; this.model = ['__proto__', 'prototype', 'constructor'].includes(defaultModel) ? '' : defaultModel;
-    this.onStart = onStart; this.onEnd = onEnd; this.onUpdate = onUpdate;
+    this.onStart = onStart; this.onEnd = onEnd; this.onUpdate = onUpdate; this.onRateLimits = onRateLimits; this.onRateLimitContext = onRateLimitContext;
     this.total = null; this.active = null; this.priming = false;
     this.identity = null; this.skipHistory = 0; this.completed = new Set();
-    this.recoverIds = new Set(recoverIds); this.recoverySeen = new Set();
+    this.recoverIds = new Set(recoverIds); this.recoverySeen = new Set(); this.rateLimitsKey = '';
   }
   identify(meta) {
     // Only the first header identifies this file; session_id may be inherited.
@@ -23,7 +46,11 @@ export class SessionParser {
     this.id = String(meta.id || meta.session_id);
     this.identity = { sessionId: this.id, parentThreadId: meta.parent_thread_id || meta.source?.subagent?.thread_spawn?.parent_thread_id || null,
       isSubagent: meta.thread_source === 'subagent' || !!meta.source?.subagent,
-      createdAt: timestamp(meta.timestamp), forked: !!meta.forked_from_id };
+      createdAt: timestamp(meta.timestamp), forked: !!meta.forked_from_id,
+      // This is the configured provider *name* written by Codex, not a URL or
+      // credential. It lets the local ledger attribute a session to one of the
+      // user's named config files without reading prompts or environment data.
+      modelProvider: typeof meta.model_provider === 'string' ? meta.model_provider.slice(0, 128) : '' };
     this.skipHistory = Number.isSafeInteger(meta.subagent_history_start_ordinal) ? Math.max(0, meta.subagent_history_start_ordinal) : 0;
   }
   prime(lines) {
@@ -60,13 +87,24 @@ export class SessionParser {
       if (this.active) this.end(timestamp(d.timestamp) || Date.now(), 'superseded');
       this.active = { id: this.id + ':' + turnId, sessionId: this.id, turnId, rootTurnId: p.root_turn_id || turnId,
         isSubagent: this.identity?.isSubagent || false, parentThreadId: this.identity?.parentThreadId || null,
+        modelProvider: this.identity?.modelProvider || '',
         byModel: {}, startedAt: startedAt || timestamp(d.timestamp) || Date.now(), ts: timestamp(d.timestamp) || Date.now(), partial: false };
       this.active.recoverable = this.recoverIds.has(this.active.id);
       if (this.active.recoverable) this.recoverySeen.add(this.active.id);
       if (!this.priming) this.onStart({ ...this.active });
       return;
     }
-    if (p.type === 'token_count' && p.info?.total_token_usage) {
+    if (p.type === 'token_count') {
+      const observedAt = timestamp(d.timestamp) || Date.now();
+      const limits = normalizeSubscriptionRateLimits(p.rate_limits, observedAt);
+      this.onRateLimitContext({ observedAt, usesSubscription: !!limits });
+      if (limits) {
+        if (this.active) this.active.subscriptionRateLimits = limits;
+        const key = JSON.stringify([limits.planType, limits.fiveHour.usedPercent, limits.fiveHour.resetsAt,
+          limits.sevenDay.usedPercent, limits.sevenDay.resetsAt]);
+        if (key !== this.rateLimitsKey) { this.rateLimitsKey = key; this.onRateLimits(limits); }
+      }
+      if (!p.info?.total_token_usage) return;
       const next = normalize(p.info.total_token_usage);
       let delta = zero();
       if (this.total) {
@@ -121,13 +159,13 @@ function sessionFiles(root, recoverIds = []) {
 
 // Synchronous scanning is confined to the worker or isolated replay tests.
 export class SessionReader {
-  constructor({ root, defaultModel = '', onStart = () => {}, onEnd = () => {}, onUpdate = () => {}, discoverMs = 3000, recoverIds = [] }) {
-    Object.assign(this, { root, defaultModel, onStart, onEnd, onUpdate, discoverMs, recoverIds });
+  constructor({ root, defaultModel = '', onStart = () => {}, onEnd = () => {}, onUpdate = () => {}, onRateLimits = () => {}, onRateLimitContext = () => {}, discoverMs = 3000, recoverIds = [] }) {
+    Object.assign(this, { root, defaultModel, onStart, onEnd, onUpdate, onRateLimits, onRateLimitContext, discoverMs, recoverIds });
     this.files = new Map(); this.lastDiscovery = 0; this.error = '';
   }
   add(info, initial) {
     const parser = new SessionParser({ id: path.basename(info.file, '.jsonl'), defaultModel: this.defaultModel,
-      onStart: this.onStart, onEnd: this.onEnd, onUpdate: this.onUpdate, recoverIds: this.recoverIds });
+      onStart: this.onStart, onEnd: this.onEnd, onUpdate: this.onUpdate, onRateLimits: this.onRateLimits, onRateLimitContext: this.onRateLimitContext, recoverIds: this.recoverIds });
     const fd = fs.openSync(info.file, 'r');
     try {
       const head = Buffer.alloc(Math.min(info.size, 1024 * 1024));
@@ -208,6 +246,8 @@ export class SessionMonitor {
       for (const item of message.events || []) {
         if (item.type === 'start') this.service.beginTurn(item.meta);
         else if (item.type === 'update') this.service.updateTurn?.(item.meta);
+        else if (item.type === 'rate-limits') this.service.updateSubscriptionRateLimits?.(item.snapshot);
+        else if (item.type === 'rate-limit-context') this.service.updateSubscriptionRateLimitContext?.(item.context);
         else this.dispatch(item.meta);
       }
       if (message.recoveryComplete) this.service.finishMissingRecovery?.(message.status?.recoverySeen || []);
@@ -233,4 +273,3 @@ export class SessionMonitor {
   status() { return { ...this.snapshot, activeTurns: [...this.service.turns.values()].filter(x => !x.isSubagent).length,
     recovery: { pending: this.service.journal?.entries.size || 0, error: this.service.journal?.error || this.service.recoveryError || '' }, worker: true }; }
 }
-

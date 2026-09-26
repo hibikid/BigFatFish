@@ -38,9 +38,13 @@ if (process.platform === 'win32') {
   if (process.env.npm_execpath && fs.existsSync(process.env.npm_execpath)) candidates.unshift(process.env.npm_execpath);
 }
 const npm = candidates.find(file => fs.existsSync(file));
-if (!npm) { process.stderr.write('请先安装包含 npm 的 Node.js 24 或更新版本。\n'); process.exit(1); }
+const pnpm = path.join(path.dirname(process.execPath), '..', 'node_modules', 'pnpm', 'bin', 'pnpm.cjs');
+if (!npm && !fs.existsSync(pnpm)) { process.stderr.write('请先安装包含 npm 或 pnpm 的 Node.js 24 或更新版本。\n'); process.exit(1); }
 fs.mkdirSync(runtimeDir, { recursive: true });
-let result = spawnSync(process.execPath, [npm, '--prefix', runtimeDir, '--cache', path.join(DATA_HOME, 'npm-cache'), 'install', '--no-audit', '--no-fund', '--ignore-scripts', '--save-exact', 'electron@44.3.0'], { stdio: 'inherit', windowsHide: true });
+const installArgs = npm
+  ? [npm, '--prefix', runtimeDir, '--cache', path.join(DATA_HOME, 'npm-cache'), 'install', '--no-audit', '--no-fund', '--ignore-scripts', '--save-exact', 'electron@44.3.0']
+  : [pnpm, '--dir', runtimeDir, '--store-dir', path.join(DATA_HOME, 'pnpm-store'), 'add', '--ignore-scripts', '--save-exact', 'electron@44.3.0'];
+let result = spawnSync(process.execPath, installArgs, { stdio: 'inherit', windowsHide: true });
 if (result.status !== 0) process.exit(result.status || 1);
 result = spawnSync(process.execPath, [path.join(runtimeDir, 'node_modules', 'electron', 'install.js')], { stdio: 'inherit', windowsHide: true });
 if (result.status !== 0) process.exit(result.status || 1);

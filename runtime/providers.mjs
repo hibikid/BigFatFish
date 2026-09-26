@@ -46,10 +46,10 @@ function field(data, key) {
 
 export class BalanceProvider {
   constructor({ fetchImpl = fetch, timeoutMs = 12000 } = {}) { this.fetch = fetchImpl; this.timeoutMs = timeoutMs; this.detected = new Map(); }
-  async json(url, key) {
+  async json(url, key, requestHeaders = {}) {
     let response;
     try {
-      response = await this.fetch(url, { headers: { Authorization: 'Bearer ' + key, Accept: 'application/json', 'User-Agent': 'API-Balance-Whale/0.2.4' }, redirect: 'error', signal: AbortSignal.timeout(this.timeoutMs) });
+      response = await this.fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'API-Balance-Whale/0.2.5', ...requestHeaders, Authorization: 'Bearer ' + key }, redirect: 'error', signal: AbortSignal.timeout(this.timeoutMs) });
     } catch { throw new ProviderError('NETWORK', '余额接口暂时无法连接，请稍后刷新', true); }
     if (!response.ok) {
       try { await response.body?.cancel(); } catch {}
@@ -106,16 +106,34 @@ export class BalanceProvider {
     if (n === null) throw new ProviderError('SHAPE', '服务商没有返回有效余额');
     return { totalBalance: n, totalUsed: null, currency: chosen.currency || c.setting.currency, adapter: 'deepseek', balanceScope: 'account', balanceLabel: 'API 账户余额', unlimited: false };
   }
+  async sourceUsage(c) {
+    const d = await this.json(c.queryUrl, c.key, c.requestHeaders);
+    const rows = Array.isArray(d?.daily_usage) ? d.daily_usage.filter(row => row && typeof row === 'object') : [];
+    if (!rows.length) throw new ProviderError('SHAPE', '查询链接未返回 daily_usage 日用量');
+    // The endpoint provides one row per day. Use the newest dated row as its
+    // cumulative daily meter; it is appropriate for start/end turn sampling.
+    const newest = [...rows].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0];
+    const used = numeric(newest.actual_cost) ?? numeric(newest.cost);
+    if (used === null || used < 0) throw new ProviderError('SHAPE', '查询链接的 daily_usage 未返回有效 cost 或 actual_cost');
+    const rateLimits = (Array.isArray(d?.rate_limits) ? d.rate_limits : []).map(item => {
+      const limit = numeric(item?.limit), remaining = numeric(item?.remaining);
+      const resetsAt = typeof item?.reset_at === 'string' && Number.isFinite(Date.parse(item.reset_at)) ? item.reset_at : null;
+      return limit === null || remaining === null ? null : { limit, remaining, resetsAt };
+    }).filter(Boolean).slice(0, 12);
+    const primaryRateLimit = rateLimits[0] ? { ...rateLimits[0], used: rounded(Math.max(0, rateLimits[0].limit - rateLimits[0].remaining)) } : null;
+    return { totalBalance: null, totalUsed: rounded(used), sourceDailyUsage: rounded(used), currency: c.setting.currency, adapter: 'source-usage', balanceScope: 'source-usage', balanceLabel: '数据源日用量', unlimited: false, rateLimits, primaryRateLimit };
+  }
   async balance(c) {
     if (!c.key) throw new ProviderError('NO_KEY', '未找到当前 API 密钥。ChatGPT 订阅登录本身不提供 API 余额；可在设置中指定 API 密钥环境变量。');
     const host = new URL(c.baseUrl).hostname;
     if (host === 'api.openai.com' && c.setting.provider === 'auto') throw new ProviderError('UNSUPPORTED', 'OpenAI 普通 API 密钥没有已验证的余额查询接口。请打开官方账单页面查看；不会把用量或 ChatGPT 订阅额度当作余额。');
-    let method = c.setting.provider;
+    let method = c.queryUrl ? 'source-usage' : c.setting.provider;
     if (method === 'auto') method = this.detected.get(c.accountId) || (host === 'api.deepseek.com' ? 'deepseek' : 'billing');
     let result;
-    try { result = await this[method === 'custom-json' ? 'custom' : method](c); }
+    const handler = method === 'custom-json' ? 'custom' : method === 'source-usage' ? 'sourceUsage' : method;
+    try { result = await this[handler](c); }
     catch (error) {
-      const canFallback = c.setting.provider === 'auto' && method === 'billing' && ['HTTP_404', 'HTTP_405', 'NOT_JSON', 'SHAPE'].includes(error.code);
+      const canFallback = !c.queryUrl && c.setting.provider === 'auto' && method === 'billing' && ['HTTP_404', 'HTTP_405', 'NOT_JSON', 'SHAPE'].includes(error.code);
       if (!canFallback) throw error;
       result = await this.newapi(c);
     }

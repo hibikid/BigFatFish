@@ -1,16 +1,22 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, globalShortcut, shell, protocol, session, net, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, globalShortcut, shell, protocol, session, net, dialog, safeStorage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { UiStateStore } = require('./ui-state-store.cjs');
+const { desktopArea, desktopBoundsSync } = require('./desktop-bounds.cjs');
+const { KeychainVault } = require('./macos/keychain-vault.cjs');
 const { shutdownCompanion } = require('./lifecycle.cjs');
 const { externalWebUrl } = require('./external-links.cjs');
 const { pathToFileURL } = require('node:url');
 const root = path.resolve(__dirname, '..');
 const dataDir = process.argv.find(a => a.startsWith('--whale-data='))?.slice(13);
 const fixture = process.env.WHALE_DESKTOP_TEST === '1';
-const initialHost = (() => { try { const h = JSON.parse(process.env.WHALE_INITIAL_HOST || 'null'); return h?.hostAlive ? h : null; } catch { return null; } })();
+// The companion normally runs as an independent desktop pet. Keep the host
+// protocol for existing follow-mode installations, but never let a missing or
+// minimized Codex window determine an independent widget's lifetime.
+const freeDesktop = process.argv.includes('--free-desktop');
+const initialHost = freeDesktop ? null : (() => { try { const h = JSON.parse(process.env.WHALE_INITIAL_HOST || 'null'); return h?.hostAlive ? h : null; } catch { return null; } })();
 const startupAt = Date.now();
-const startup = { revision: 'codex-0.2.4', requestedAt: Number(process.env.WHALE_LAUNCH_TIME) || startupAt, mainAt: startupAt, phases: {} };
+const startup = { revision: 'free-desktop-v1', requestedAt: Number(process.env.WHALE_LAUNCH_TIME) || startupAt, mainAt: startupAt, phases: {} };
 const markStartup = phase => { if (startup.phases[phase] == null) startup.phases[phase] = Date.now() - startup.requestedAt; };
 markStartup('main');
 const isMac = process.platform === 'darwin';
@@ -35,6 +41,7 @@ const values = () => uiStore.get();
 const storeValues = input => uiStore.set(input);
 let gpuStatus = null, inputEnabled = false, keyboardFocus = false, testCursor = null, lastCursor = '', presents = 0;
 const pendingCommands = [];
+let pendingApprovalNotice = false, lastApprovalNoticeAt = 0;
 let trustedGestureAt = 0;
 app.on('gpu-info-update', () => {
   gpuStatus = { hardwareAcceleration: app.isHardwareAccelerationEnabled(), features: app.getGPUFeatureStatus(), electron: process.versions.electron, chromium: process.versions.chrome };
@@ -56,7 +63,8 @@ function sendCursor(force = false) {
 function setTestCursor(point) { if (fixture) { testCursor = point; sendCursor(true); } }
 function visibility() {
   if (!window || window.isDestroyed()) return;
-  if (rendererReady && lastHost?.visible && (fixture || lastHost.attached) && !manuallyHidden) {
+  const hostAllowsDisplay = lastHost?.visible && (fixture || lastHost.attached);
+  if (rendererReady && (freeDesktop || hostAllowsDisplay) && !manuallyHidden) {
     if (!window.isVisible()) window.showInactive();
     if (startup.phases.interactive == null) {
       markStartup('interactive');
@@ -76,14 +84,22 @@ function sendCommand(command) {
 function flushCommands() {
   if (!rendererReady || !window || window.isDestroyed()) return;
   for (const command of pendingCommands.splice(0)) window.webContents.send('whale-command', command);
+  if (pendingApprovalNotice) { pendingApprovalNotice = false; window.webContents.send('whale-approval-request'); }
+}
+function notifyApprovalRequest() {
+  if (!window || window.isDestroyed() || Date.now() - lastApprovalNoticeAt < 750) return;
+  lastApprovalNoticeAt = Date.now();
+  show();
+  if (rendererReady) window.webContents.send('whale-approval-request');
+  else pendingApprovalNotice = true;
 }
 async function showStatusDialog() {
   let provider = {};
   try { provider = dispatcher?.whale?.config?.publicInfo() || {}; } catch {}
   const lines = [
     '平台：' + process.platform,
-    '跟随模式：' + (lastHost?.followMode || (lastHost?.nativeFollowing ? 'native' : '等待 Codex')),
-    'Codex PID：' + (lastHost?.hostPid || '未检测到'),
+    '运行模式：' + (freeDesktop ? '自由桌面（不绑定 Codex 窗口）' : (lastHost?.followMode || (lastHost?.nativeFollowing ? 'native' : '等待 Codex'))),
+    ...(freeDesktop ? [] : ['Codex PID：' + (lastHost?.hostPid || '未检测到')]),
     '挂件窗口：' + (window?.isVisible?.() ? '显示' : '隐藏'),
     '服务商：' + (provider.providerName || '未配置'),
     'API 地址：' + (provider.baseUrl || '未配置'),
@@ -101,11 +117,13 @@ async function showStatusDialog() {
 // this repairs any dropped, out-of-order or zero-handle state without changing
 // the intended hide-on-minimize behaviour. The timer starts with the window.
 function assertVisibility() {
-  if (!lastHost || lastHost.hostAlive === false) return;
+  if (!freeDesktop && (!lastHost || lastHost.hostAlive === false)) return;
   visibility();
 }
 function pauseAndQuit() {
-  if (isMac) {
+  if (freeDesktop) {
+    save(path.join(dataDir, 'pause-until-host-exit.json'), { pauseAll: true, mode: 'free-desktop' });
+  } else if (isMac) {
     save(path.join(dataDir, 'pause-until-host-exit.json'), {
       pauseAll: true,
       hostPid: lastHost?.hostPid || 0,
@@ -135,6 +153,7 @@ async function openWebLink(value, gestureRequired = true) {
 }
 async function setHost(host) {
   if (!host || typeof host.hostAlive !== 'boolean') return;
+  if (freeDesktop) return;
   // 0.2.0: an older serial is stale for geometry only. The supervisor restarts
   // its counter at 1 whenever it restarts, so dropping the whole message used to
   // freeze the widget's visibility state forever; accept the snapshot for
@@ -200,7 +219,8 @@ else {
     const { startBridge } = await import(pathToFileURL(path.join(root, 'runtime', 'bridge.mjs')));
     let testOptions = {};
     if (fixture) { const { makeFixture } = await import(pathToFileURL(path.join(root, 'tests', 'desktop-fixture.mjs'))); testOptions = await makeFixture(dataDir); }
-    dispatcher = createDispatcher({ dataDir, fetchImpl: (url, options) => net.fetch(url, options), onStop: pauseAndQuit, onShow: show, statusInfo: () => ({ followCodex: true, platform: process.platform, followMode: lastHost?.followMode || null, hostPid: lastHost?.hostPid || null, visible: !!window?.isVisible(), nativeFollowing: !!lastHost?.nativeFollowing, startup, rendering: gpuStatus }), ...testOptions });
+    const secretVault = new KeychainVault({ dataDir, safeStorage });
+    dispatcher = createDispatcher({ dataDir, secretVault, fetchImpl: (url, options) => net.fetch(url, options), onStop: pauseAndQuit, onShow: show, statusInfo: () => ({ followCodex: !freeDesktop, freeDesktop, platform: process.platform, followMode: freeDesktop ? 'free-desktop' : (lastHost?.followMode || null), hostPid: freeDesktop ? null : (lastHost?.hostPid || null), visible: !!window?.isVisible(), nativeFollowing: freeDesktop ? false : !!lastHost?.nativeFollowing, startup, rendering: gpuStatus }), ...testOptions });
     markStartup('dispatcherReady');
     await importLegacyStorage();
     session.defaultSession.protocol.handle('whale', async request => {
@@ -209,9 +229,9 @@ else {
       const result = await dispatcher.dispatch(url.pathname + url.search, { method: request.method, body: ['GET', 'HEAD'].includes(request.method) ? null : Buffer.from(await request.arrayBuffer()), headers: Object.fromEntries(request.headers) });
       return new Response(request.method === 'HEAD' ? null : result.body, { status: result.status, headers: result.headers });
     });
-    const firstBounds = initialHost?.bounds;
+    const firstBounds = freeDesktop ? null : initialHost?.bounds;
     const area = firstBounds && ['x','y','width','height'].every(k => Number.isFinite(firstBounds[k])) && firstBounds.width > 10 && firstBounds.height > 10
-      ? toDipRect(firstBounds) : screen.getPrimaryDisplay().workArea;
+      ? toDipRect(firstBounds) : (freeDesktop ? desktopArea(screen) : null) || screen.getPrimaryDisplay().workArea;
     // WS_EX_TOOLWINDOW keeps the large transparent overlay out of Chromium's
     // native occlusion calculation even while its opaque pixels accept clicks.
     // Keep normal activation: Chromium's non-client handler consumes the first
@@ -221,7 +241,7 @@ else {
       if (app.dock) app.dock.hide();
       window.setAlwaysOnTop(true, 'floating', 1);
       window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
-    }
+    } else if (freeDesktop) window.setAlwaysOnTop(true, 'floating');
     markStartup('windowCreated');
     window.once('ready-to-show', () => markStartup('frameReady'));
     if (fixture) window.webContents.on('console-message', (_event, ...args) => { const d = args[0]; if (typeof d === 'object' ? d.level === 'error' : d === 3) rendererErrors.push(typeof d === 'object' ? d.message : args[1]); });
@@ -229,6 +249,15 @@ else {
     window.setIgnoreMouseEvents(true, { forward: true });
     window.on('show', () => { invalidate(); sendCursor(true); });
     window.on('resize', invalidate);
+    let syncDesktop = null;
+    if (freeDesktop) {
+      const syncBounds = desktopBoundsSync(screen, window);
+      syncDesktop = () => { if (syncBounds()) { invalidate(); sendCursor(true); } };
+      for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) screen.on(event, syncDesktop);
+      app.once('will-quit', () => {
+        for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) screen.off(event, syncDesktop);
+      });
+    }
     // 0.2.0: an un-minimize, a restore from the taskbar or a re-show must land on
     // the same visibility decision immediately rather than waiting for the next
     // supervisor sample.
@@ -276,11 +305,11 @@ else {
       if (event.sender === window.webContents && typeof editing === 'boolean') setKeyboardFocus(editing);
     });
     const cursorPoll = setInterval(sendCursor, 50);
-    visibilityWatchdog = setInterval(assertVisibility, 1000);
+    visibilityWatchdog = setInterval(() => { syncDesktop?.(); assertVisibility(); }, 1000);
     if (visibilityWatchdog.unref) visibilityWatchdog.unref();
     app.once('will-quit', () => { clearInterval(cursorPoll); clearInterval(visibilityWatchdog); visibilityWatchdog = null; });
     const icon = nativeImage.createFromPath(path.join(root, 'assets', 'DSniang1.png')).resize({ width: 24, height: 24 });
-    tray = new Tray(icon); tray.setToolTip('API 余额小鲸鱼 · 跟随 Codex');
+    tray = new Tray(icon); tray.setToolTip(freeDesktop ? 'API 余额小鲸鱼 · 自由桌面' : 'API 余额小鲸鱼 · 跟随 Codex');
     const trayTemplate = [{ label: '显示 / 隐藏小鲸鱼', click: toggle }];
     if (isMac) {
       trayTemplate.push({ label: '命令', submenu: [
@@ -294,10 +323,10 @@ else {
     } else {
       trayTemplate.push({ label: 'API 设置', click: () => { show(); window.webContents.send('whale-settings'); } });
     }
-    trayTemplate.push({ type: 'separator' }, { label: '本次退出挂件（下次打开 Codex 恢复）', click: pauseAndQuit });
+    trayTemplate.push({ type: 'separator' }, { label: freeDesktop ? '停止挂件（可从启动命令恢复）' : '本次退出挂件（下次打开 Codex 恢复）', click: pauseAndQuit });
     tray.setContextMenu(Menu.buildFromTemplate(trayTemplate));
     tray.on('double-click', toggle); globalShortcut.register(isMac ? 'Command+Option+W' : 'Control+Alt+W', toggle);
-    bridge = await startBridge(dispatcher, { dataDir, onHost: setHost });
+    bridge = await startBridge(dispatcher, { dataDir, onHost: setHost, onApprovalRequest: notifyApprovalRequest });
     markStartup('bridgeReady');
     await window.loadURL(UI_ORIGIN + '/widget.html');
     markStartup('pageLoaded');
@@ -307,7 +336,7 @@ else {
       const { verifyDesktop } = await import(pathToFileURL(path.join(root, 'tests', fixtureModule)));
       await verifyDesktop({ app, window, screen, setHost, setTestCursor, dispatcher, dataDir, errors: rendererErrors, openedLinks: fixtureOpenedLinks, renderInfo: () => ({ gpuStatus, presents, inputEnabled, keyboardFocus }) });
     }
-    else { const heartbeat = setInterval(() => { if (Date.now() - hostHeartbeat > 6000) app.quit(); }, 2000); app.once('will-quit', () => clearInterval(heartbeat)); }
+    else if (!freeDesktop) { const heartbeat = setInterval(() => { if (Date.now() - hostHeartbeat > 6000) app.quit(); }, 2000); app.once('will-quit', () => clearInterval(heartbeat)); }
   }).catch(error => { try { save(path.join(dataDir, 'desktop-error.json'), { message: String(error.message).slice(0, 350), at: new Date().toISOString() }); } catch {} app.exit(1); });
   app.on('window-all-closed', () => { if (!quitting && rendererReady) app.quit(); });
   app.on('before-quit', event => {
