@@ -80,6 +80,32 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     passed.push('custom approval sound survives a full Electron process restart');
     await capture('restart-approval');
   } else {
+    const now = Date.now();
+    dispatcher.whale.updateSubscriptionRateLimits({ observedAt: now, planType: 'plus',
+      fiveHour: { usedPercent: 25, windowMinutes: 300, resetsAt: now + 3600000 },
+      sevenDay: { usedPercent: 60, windowMinutes: 10080, resetsAt: now + 86400000 } });
+    dispatcher.whale.updateSubscriptionRateLimitContext({ observedAt: now, usesSubscription: true });
+    await js('window.__whaleRenderTest.refresh(true)');
+    await until("document.querySelector('.dshwv-root').title.includes('Codex 订阅额度')", 'subscription did not replace API display');
+    await js('window.__whaleRenderTest.queue([{ kind: "normal" }]); window.__whaleRenderTest.open();');
+    await until("window.__whaleRenderTest.status().randomPicks.includes('5小时剩余75%') && window.__whaleRenderTest.status().randomPicks.includes('7天剩余40%')", 'subscription bubble did not use quota text');
+    await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('5小时剩余75%') && Number(getComputedStyle(el).opacity) > 0.99)", 'subscription text did not become visible');
+    await capture('subscription-display');
+    await js('window.__whaleRenderTest.close()');
+    dispatcher.whale.updateSubscriptionRateLimitContext({ observedAt: now + 1, usesSubscription: false });
+    await js('window.__whaleRenderTest.refresh(true)');
+    await until("document.querySelector('.dshwv-root').title.includes('自定义 API 余额')", 'API fallback did not restore display');
+    const completed = { id: 'fixture:completed', sessionId: 'fixture', turnId: 'completed', ts: Date.now(),
+      byModel: { 'test-model': { input_tokens: 100, cached_input_tokens: 0, output_tokens: 20 } } };
+    dispatcher.whale.beginTurn(completed);
+    await dispatcher.whale.finishTurn(completed);
+    await js('window.__whaleRenderTest.poll()');
+    await until("window.__whaleRenderTest.status().scene === 'cost' && window.__whaleRenderTest.status().randomPicks.includes('待记账') && window.__whaleRenderTest.status().randomPicks.includes('120 tokens')", 'task result did not become a cost bubble');
+    await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('待记账') && Number(getComputedStyle(el).opacity) > 0.99)", 'task cost text did not become visible');
+    await capture('task-cost-display');
+    await js('window.__whaleRenderTest.close()');
+    passed.push('real usage requests switch subscription/API display and map a completion to a pending-cost bubble');
+
     await approval();
     assert.ok((await js('window.__playedAudio')).some(url => url.includes('fx1') && url.includes('release')));
     await delay(13200);

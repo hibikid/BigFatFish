@@ -100,6 +100,7 @@ node scripts/control.mjs balance
 package.json                包信息与快捷脚本
 assets/                     whale-widget.js（挂件前端 bundle）+ 角色/气泡/音效素材
 desktop/                    Electron 主进程、预加载、桌面服务监督器、页面脚本
+desktop/ui/usage-*.js       前端用量请求与展示适配（见 docs/USAGE-DISPLAY.md）
 desktop/macos/              macOS LaunchAgent 监督器（保留旧版窗口探针兼容代码）
 runtime/                    余额与用量服务：配置解析、provider、账本、汇率、会话监视、MCP、IPC
 lib/                        素材校验、资源库、widget 宿主

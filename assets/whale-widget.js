@@ -15,10 +15,16 @@
 
 
     var BUBBLE_MS = 5000;
-    var FETCH_TIMEOUT_MS = 25000;
     var whaleMoneyTemplates = new WeakMap();
-    var BALANCE_URL = '/dsh-whale/balance.json';
-    var SUBSCRIPTION_URL = '/api/subscription-rate-limits';
+    var usageClient = WhaleUsageClient.create({
+      fetchImpl: window.fetch.bind(window),
+      acceptsSubscription: WhaleUsagePresentation.hasSubscription,
+      shouldNotify: WhaleTurnNotice.shouldNotify,
+      storage: {
+        getItem: function (key) { return localStorage.getItem(key); },
+        setItem: function (key, value) { localStorage.setItem(key, value); }
+      }
+    });
     var SIZE_URL = '/dsh-whale/size.json';
     var IMG_URL = '/dsh-whale/image.png?v=2';
     var GIF_URL = '/dsh-whale/rua.gif';
@@ -950,16 +956,10 @@
     rowRes.appendChild(menuLabel('资源管理'));
     rowRes.appendChild(resOpenBtn);
     menuBox.appendChild(rowRes);
-    var USAGE_REC_URL = '/dsh-whale/usage-records.json';
     var usageSet = null;
-    var USAGE_SET_URL = '/dsh-whale/usage-settings.json';
     function loadUsageSettings(cb) {
       try {
-        fetch(USAGE_SET_URL, {
-          cache: 'no-store'
-        }).then(function (r) {
-          return r.json();
-        }).then(function (d) {
+        usageClient.settings().then(function (d) {
           if (d && d.ok && d.settings) usageSet = d.settings;
           if (cb) cb();
         }).catch(function () {
@@ -971,15 +971,7 @@
     }
     function saveUsageSettings(patch) {
       try {
-        fetch(USAGE_SET_URL, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(patch || ({}))
-        }).then(function (r) {
-          return r.json();
-        }).then(function (d) {
+        usageClient.saveSettings(patch).then(function (d) {
           requireSaved(d);
           if (d && d.ok && d.settings) usageSet = d.settings;
         }).catch(assetFailure);
@@ -1675,11 +1667,7 @@
       var body = document.createElement('div');
       body.textContent = '加载中…';
       usageMainEl.appendChild(body);
-      fetch(USAGE_REC_URL, {
-        cache: 'no-store'
-      }).then(function (r) {
-        return r.json();
-      }).then(function (d) {
+      usageClient.records().then(function (d) {
         if (d && d.ok && d.settings) usageSet = d.settings;
         WhaleMoney.refreshBindings(usagePanel);
         fillUsagePanel(d);
@@ -1814,11 +1802,7 @@
     function openUsageRecordsWindow() {
       usageMoreCard.innerHTML = '<div style="padding:10px;color:#203170">加载中…</div>';
       usageMoreMask.style.display = 'flex';
-      fetch(USAGE_REC_URL, {
-        cache: 'no-store'
-      }).then(function (r) {
-        return r.json();
-      }).then(function (d) {
+      usageClient.records().then(function (d) {
         fillUsageRecordsWindow(d);
       }).catch(function () {
         usageMoreCard.innerHTML = '<div style="padding:10px;color:#203170">加载失败</div>';
@@ -8407,6 +8391,7 @@
       return line;
     }
     function bubbleRenderSubscriptionNotice(snapshot) {
+      var lines = WhaleUsagePresentation.quotaLines(snapshot);
       // These three elements are deliberately separate from the legacy
       // amount/token fields, so a personal subscription turn cannot inherit
       // their size, color, or money-binding behavior.
@@ -8423,19 +8408,19 @@
       container.style.flexDirection = 'column';
       container.style.alignItems = 'center';
       var fiveHour = bubbleSubscriptionNoticeLine(
-        '5小时剩余' + quotaPercent(snapshot && snapshot.fiveHour),
+        lines.fiveHour,
         8,
         'dshwv-rgb dshwv-rgb-indigo dshwv-subscription-notice-quota'
       );
       fiveHour.style.animationDuration = bubbleMarqueeDur();
       var sevenDay = bubbleSubscriptionNoticeLine(
-        '7天剩余' + quotaPercent(snapshot && snapshot.sevenDay),
+        lines.sevenDay,
         8,
         'dshwv-rgb dshwv-rgb-indigo dshwv-subscription-notice-quota'
       );
       sevenDay.style.animationDuration = bubbleMarqueeDur();
       var reset = bubbleSubscriptionNoticeLine(
-        '5小时重置' + (quotaResetTime(snapshot && snapshot.fiveHour) || '--:--'),
+        lines.reset,
         4,
         'dshwv-subscription-notice-reset'
       );
@@ -8447,14 +8432,14 @@
     }
     function bubbleRenderCost(amount, notice) {
       notice = notice || WhaleTurnNotice.snapshot({ amount: amount }, state.currency);
-      var quota = notice.subscriptionRateLimits;
-      if (hasSubscriptionQuota(quota)) {
-        bubbleRenderSubscriptionNotice(quota);
+      var view = WhaleUsagePresentation.taskBubble(notice, fmt);
+      if (view.kind === 'subscription') {
+        bubbleRenderSubscriptionNotice(notice.subscriptionRateLimits);
         return;
       }
       labelEl.style.display = '';
       labelEl.className = 'dshwv-label';
-      labelEl.textContent = notice.label;
+      labelEl.textContent = view.label;
       labelEl.style.color = '';
       labelEl.style.width = '100%';
       labelEl.style.maxWidth = '100%';
@@ -8465,17 +8450,15 @@
       labelEl.style.letterSpacing = '.02em';
       amountEl.style.display = '';
       amountEl.className = 'dshwv-amount';
-      if (notice.amount === null) amountEl.textContent = notice.costState === 'pending' ? '待记账' : '金额未知';
+      if (notice.amount === null) amountEl.textContent = view.amount;
       else {
-        WhaleMoney.bind(amountEl, function () { return fmt(notice.amount, notice.currency); });
+        WhaleMoney.bind(amountEl, function () { return WhaleUsagePresentation.taskBubble(notice, fmt).amount; });
       }
-      amountEl.title = notice.note;
+      amountEl.title = view.note;
       amountEl.style.color = '#e0433f';
       hintEl.style.display = '';
-      hintEl.textContent = (notice.tokens === null ? '' : notice.tokens.toLocaleString('en-US') + ' tokens · ') +
-        (notice.costState === 'pending' ? '等待账单确认' : notice.costState === 'unknown' ? '以服务商账单为准' :
-          notice.costState === 'estimated' ? '配置价格估算' : '同密钥区间观测');
-      hintEl.title = notice.note;
+      hintEl.textContent = view.hint;
+      hintEl.title = view.note;
       hintEl.style.color = '';
       hintEl.style.width = '100%';
       hintEl.style.maxWidth = '100%';
@@ -8534,29 +8517,7 @@
       return Math.round(40 + (n - 1) * 200 / 49);
     }
     function hasSubscriptionQuota(snapshot) {
-      var value = snapshot || state.subscription;
-      return !!(value && value.available !== false && value.fiveHour && value.sevenDay &&
-        isFinite(Number(value.fiveHour.remainingPercent)) && isFinite(Number(value.sevenDay.remainingPercent)));
-    }
-    function quotaPercent(window) {
-      var n = Number(window && window.remainingPercent);
-      return isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) + '%' : '--';
-    }
-    function quotaResetTime(window) {
-      var ms = Date.parse(window && window.resetsAt || '');
-      if (!isFinite(ms)) return '';
-      try {
-        return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
-      } catch (err) {
-        var d = new Date(ms);
-        return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-      }
-    }
-    function quotaFirstClickBalanceText(snapshot) {
-      return '5小时剩余' + quotaPercent(snapshot && snapshot.fiveHour) + '\n7天剩余' + quotaPercent(snapshot && snapshot.sevenDay);
-    }
-    function quotaFirstClickResetText(snapshot) {
-      return '5小时重置' + (quotaResetTime(snapshot && snapshot.fiveHour) || '--:--');
+      return WhaleUsagePresentation.hasSubscription(snapshot || state.subscription);
     }
     function bubbleLabelText(snapshot) {
       return '当前 API 余额';
@@ -8677,10 +8638,8 @@
         var captured = { balance: state.balance, balanceText: state.balanceText, todayUsage: state.todayUsage, currency: state.currency || 'USD', subscription: state.subscription };
         var firstSubscriptionQuota = !!(options && options.firstSubscriptionQuota && hasSubscriptionQuota(captured.subscription));
         var moneyText = function () {
-          if (firstSubscriptionQuota) return mod.type === 'balance' ? quotaFirstClickBalanceText(captured.subscription) : quotaFirstClickResetText(captured.subscription);
-          var value = mod.type === 'balance' ? captured.balanceText || (captured.balance === null ? '…' : fmt(captured.balance, captured.currency)) :
-            '今日已观测 ' + (captured.todayUsage != null ? fmt(captured.todayUsage, captured.currency) : '--');
-          return bubbleContentText(mod, value, captured);
+          var value = WhaleUsagePresentation.balanceRow(captured, mod.type, { firstSubscriptionQuota: firstSubscriptionQuota, formatMoney: fmt });
+          return firstSubscriptionQuota ? value : bubbleContentText(mod, value, captured);
         };
         return {
           txt: moneyText(),
@@ -9219,15 +9178,8 @@
     function fmt(balance, currency) {
       return WhaleMoney.formatMoney(balance, currency || state && state.currency || 'USD', true);
     }
-    function quotaText(value) {
-      if (!value || !isFinite(Number(value.limit)) || !isFinite(Number(value.used))) return '';
-      try {
-        var formatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 });
-        return formatter.format(Number(value.used)) + '/' + formatter.format(Number(value.limit));
-      } catch (err) { return String(value.used) + '/' + String(value.limit); }
-    }
     function hasBalanceDisplay(values) {
-      return !!(values && values.balanceText) || !!(values && values.balance !== null && values.balance !== undefined);
+      return WhaleUsagePresentation.hasBalance(values);
     }
     
     function render(firstSubscriptionQuota) {
@@ -9235,12 +9187,10 @@
       if (bubbleFrames.switching && !bubbleBuilding) return;
       if (!bubbleBuilding) return;
       var captured = { balance: state.balance, balanceText: state.balanceText, todayUsage: state.todayUsage, currency: state.currency || 'USD', subscription: state.subscription, status: state.status, message: state.message };
-      var showSubscriptionQuota = !!(firstSubscriptionQuota && hasSubscriptionQuota(captured.subscription));
-      amountEl.style.whiteSpace = showSubscriptionQuota ? 'pre-line' : '';
-      WhaleMoney.bind(amountEl, function () { return showSubscriptionQuota ? quotaFirstClickBalanceText(captured.subscription) :
-        captured.balanceText || (!hasBalanceDisplay(captured) ? (captured.status === 'error' ? '--' : '…') : fmt(captured.balance, captured.currency)); });
-      WhaleMoney.bind(hintEl, function () { return showSubscriptionQuota ? quotaFirstClickResetText(captured.subscription) :
-        captured.status === 'error' ? (captured.message || '获取失败 · 点击重试').slice(0, 20) : !hasBalanceDisplay(captured) ? '加载中…' : '今日已观测 ' + (captured.todayUsage != null ? fmt(captured.todayUsage, captured.currency) : '--'); });
+      var options = { firstSubscriptionQuota: firstSubscriptionQuota, formatMoney: fmt };
+      amountEl.style.whiteSpace = WhaleUsagePresentation.balanceBubble(captured, options).preLine ? 'pre-line' : '';
+      WhaleMoney.bind(amountEl, function () { return WhaleUsagePresentation.balanceBubble(captured, options).amount; });
+      WhaleMoney.bind(hintEl, function () { return WhaleUsagePresentation.balanceBubble(captured, options).hint; });
     }
     function refreshOpenNormalBubble() {
       if (!bubbleShown || !bubbleScene || bubbleScene.kind !== 'normal') return;
@@ -9249,20 +9199,13 @@
         bubbleRenderDefault(firstSubscriptionQuota);
       }, bubbleScene.ttlMs || BUBBLE_MS, { firstSubscriptionQuota: firstSubscriptionQuota });
     }
-    function subscriptionFingerprint(value) {
-      if (!hasSubscriptionQuota(value)) return '';
-      return [value.planType || '', value.fiveHour.remainingPercent, value.fiveHour.resetsAt,
-        value.sevenDay.remainingPercent, value.sevenDay.resetsAt].join('|');
-    }
     function applySubscriptionQuota(subscription) {
-      if (!hasSubscriptionQuota(subscription)) return false;
-      var changed = subscriptionFingerprint(state.subscription) !== subscriptionFingerprint(subscription);
-      state.subscription = subscription;
-      state.message = '';
-      state.status = 'ok';
-      var plan = subscription.planType ? ' · ' + String(subscription.planType).toUpperCase() : '';
-      root.title = 'Codex 订阅额度' + plan + '（来自本机会话额度快照）';
-      img.alt = 'Codex 订阅额度';
+      var view = WhaleUsagePresentation.subscription(subscription);
+      if (!view) return false;
+      var changed = WhaleUsagePresentation.subscriptionFingerprint(state.subscription) !== WhaleUsagePresentation.subscriptionFingerprint(subscription);
+      Object.assign(state, view.state);
+      root.title = view.title;
+      img.alt = view.alt;
       if (changed) {
         window.dispatchEvent(new CustomEvent('whale-balance', { detail: subscription }));
         refreshOpenNormalBubble();
@@ -9273,9 +9216,7 @@
     function refreshSubscriptionQuota() {
       if (subscriptionPolling) return;
       subscriptionPolling = true;
-      fetch(SUBSCRIPTION_URL, { cache: 'no-store' }).then(function (r) {
-        return r.json();
-      }).then(function (subscription) {
+      usageClient.subscription().then(function (subscription) {
         if (applySubscriptionQuota(subscription)) return;
         if (state.subscription !== null) {
           state.subscription = null;
@@ -9388,64 +9329,28 @@
       if (busy) return;
       busy = true;
       if (manual || !hasBalanceDisplay(state) && !hasSubscriptionQuota()) state.status = 'loading';
-      var ctrl = null;
-      var timer = null;
-      try {
-        ctrl = new AbortController();
-        timer = setTimeout(function () {
-          try {
-            ctrl.abort();
-          } catch (err) {}
-        }, FETCH_TIMEOUT_MS);
-      } catch (err) {}
-      fetch(SUBSCRIPTION_URL, {
-        cache: 'no-store',
-        signal: ctrl ? ctrl.signal : undefined
-      }).then(function (r) {
-        return r.json();
-      }).catch(function () {
-        // A temporary local read failure should not erase an already displayed
-        // subscription snapshot just to fall back to an unrelated API key.
-        return undefined;
-      }).then(function (subscription) {
-        if (applySubscriptionQuota(subscription)) return null;
-        if (subscription === undefined && hasSubscriptionQuota()) {
+      usageClient.overview({
+        manual: !!manual,
+        getSubscription: function () { return state.subscription; },
+        onBalanceFallback: function () { state.subscription = null; }
+      }).then(function (result) {
+        if (result.kind === 'subscription') { applySubscriptionQuota(result.data); return; }
+        if (result.kind === 'retained-subscription') {
           state.status = 'ok';
-          return null;
+          return;
         }
-        state.subscription = null;
-        return fetch(BALANCE_URL + (manual ? '?refresh=1' : ''), {
-          cache: 'no-store',
-          signal: ctrl ? ctrl.signal : undefined
-        }).then(function (r) {
-          return r.json();
-        });
-      }).then(function (data) {
-        if (data === null) return;
+        var data = result.data;
+        var view = WhaleUsagePresentation.balance(data);
+        Object.assign(state, view.state);
         if (data && data.ok) {
-          var nb = data.unlimited ? Infinity : data.totalBalance === null || data.totalBalance === undefined ? null : Number(data.totalBalance);
-          var nc = String(data.currency || 'USD');
-          state.balance = nb;
-          state.balanceText = quotaText(data.primaryRateLimit);
-          state.currency = nc;
-          WhaleMoney.setNativeCurrency(nc);
-          state.message = '';
-          state.todayUsage = data.todayUsage !== undefined ? data.todayUsage : null;
-          state.todayUsageSource = data.todayUsageSource || 'ledger';
-          state.unlimited = !!data.unlimited;
-          state.providerName = data.providerName || '';
-          state.balanceScope = data.balanceScope || '';
-          state.stale = !!data.stale;
-          root.title = (data.providerName || '') + ' · ' + (data.balanceLabel || 'API 可用余额') + (data.stale ? '（上次成功数据）' : '');
-          img.alt = '当前 API 余额';
+          WhaleMoney.setNativeCurrency(state.currency);
+          root.title = view.title;
+          img.alt = view.alt;
           window.dispatchEvent(new CustomEvent('whale-balance', {
             detail: data
           }));
-          checkUsageAlerts(nb, state.todayUsage);
-          state.status = 'ok';
+          checkUsageAlerts(state.balance, state.todayUsage);
         } else {
-          state.status = 'error';
-          state.message = data && data.error ? String(data.error) : '获取失败';
           window.dispatchEvent(new CustomEvent('whale-balance', {
             detail: data || ({
               ok: false
@@ -9454,12 +9359,10 @@
         }
       }).catch(function () {
         if (!hasSubscriptionQuota()) {
-          state.status = 'error';
-          state.message = '获取失败';
+          Object.assign(state, WhaleUsagePresentation.balance(null).state);
         }
       }).finally(function () {
         busy = false;
-        if (timer) clearTimeout(timer);
       });
     }
     var soundOn = true;
@@ -11757,43 +11660,15 @@
       if (!menuOpen) toggleMenu();
       showUsageSub();
     });
-    var LAST_TURN_URL = '/dsh-whale/last-turn.json';
-    var lastCostSeq = 0;
-    var lastCostAligned = false;
-    var lastCostId = '';
-    var lastCostPending = false;
-    var costPollingStartedAt = Date.now();
-    try {
-      var lastCostStored = Number(localStorage.getItem('dshw-last-seq') || 0);
-      if (isFinite(lastCostStored) && lastCostStored >= 0) lastCostSeq = lastCostStored;
-      lastCostId = localStorage.getItem('dshw-last-turn-id') || '';
-    } catch (err) {}
     function pollLastTurn() {
-      if (lastCostPending) return;
-      lastCostPending = true;
       try {
-        fetch(LAST_TURN_URL, {
-          cache: 'no-store'
-        }).then(function (r) {
-          return r.json();
-        }).then(function (d) {
-          if (!d || !d.ok || typeof d.seq !== 'number') return;
-          if (d.seq < lastCostSeq) return;
-          var firstPoll = !lastCostAligned;
-          lastCostAligned = true;
-          var fresh = WhaleTurnNotice.shouldNotify(d, { seq: lastCostSeq, id: lastCostId, firstPoll: firstPoll, startedAt: costPollingStartedAt });
-          lastCostSeq = d.seq;
-          if (d.id) lastCostId = d.id;
-          try {
-            localStorage.setItem('dshw-last-seq', String(lastCostSeq));
-            localStorage.setItem('dshw-last-turn-id', lastCostId);
-          } catch (err) {}
-          if (!fresh) return;
-          var notice = WhaleTurnNotice.snapshot(d, state.currency);
+        usageClient.pollTurn().then(function (result) {
+          if (!result.fresh) return;
+          var notice = WhaleTurnNotice.snapshot(result.record, state.currency);
           if (notice.completionKind === 'success') playTaskEndSound();
           showCostBubble(notice.amount, notice);
-        }).catch(function () {}).finally(function () { lastCostPending = false; });
-      } catch (err) { lastCostPending = false; }
+        }).catch(function () {});
+      } catch (err) {}
     }
     setInterval(pollLastTurn, 1000);
     window.addEventListener('whale-approval-request', showApprovalReminder);
