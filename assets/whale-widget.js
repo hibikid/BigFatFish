@@ -987,6 +987,17 @@
       window.dispatchEvent(new Event('whale-open-settings'));
     });
     menuBox.appendChild(apiSettingsBtn);
+    var chatSettingsBtn = document.createElement('button');
+    chatSettingsBtn.type = 'button';
+    chatSettingsBtn.className = apiSettingsBtn.className;
+    chatSettingsBtn.style.cssText = apiSettingsBtn.style.cssText;
+    chatSettingsBtn.textContent = '会话设置';
+    chatSettingsBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      closeMenu();
+      window.dispatchEvent(new Event('whale-open-chat-settings'));
+    });
+    menuBox.appendChild(chatSettingsBtn);
     var commandTitle = document.createElement('div');
     commandTitle.className = 'dshwv-usage-hint';
     commandTitle.textContent = '命令';
@@ -11329,6 +11340,7 @@
     }
     function onDocPointerDown(e) {
       if (e.target && e.target.closest) {
+        if (e.target.closest('.chat-composer,.chat-reply,dialog')) return;
         if (e.target.closest('.dshwv-pop') || e.target.closest('.dshwv-menu-btn')) return;
         if (e.target.closest('.dshwv-rolelist') || e.target.closest('.dshwv-audiolist') || e.target.closest('.dshwv-cropmask') || e.target.closest('.dshwv-confirmmask') || e.target.closest('.dshwv-audiomask') || e.target.closest('.dshwv-snapmask') || e.target.closest('.dshwv-bubmask') || e.target.closest('.dshwv-qedit') || e.target.closest('.dshwv-usagepanel') || e.target.closest('.dshwv-usage-mask') || e.target.closest('.dshwv-resmask') || e.target.closest('.dshwv-custmenu') || e.target.closest('.dshwv-custbtn') || e.target.closest('.dshwv-fxinfo') || e.target.closest('.dshwv-fxicon')) return;
         if (e.target.closest('.dshwv-rolebtn') || e.target.closest('.dshwv-audiobtn') || e.target.closest('.dshwv-roleimport') || e.target.closest('.dshwv-audioimport')) return;
@@ -11393,6 +11405,7 @@
     }
     function onDocClickStopper(e) {
       if (e.target && e.target.closest) {
+        if (e.target.closest('.chat-composer,.chat-reply,dialog')) return;
         if (e.target.closest('.dshwv-pop') || e.target.closest('.dshwv-menu') || e.target.closest('.dshwv-menu-btn') || e.target.closest('.dshwv-rolelist') || e.target.closest('.dshwv-cropmask') || e.target.closest('.dshwv-confirmmask') || e.target.closest('.dshwv-audiolist') || e.target.closest('.dshwv-audiomask') || e.target.closest('.dshwv-snapmask') || e.target.closest('.dshwv-bubmask') || e.target.closest('.dshwv-qedit') || e.target.closest('.dshwv-usagepanel') || e.target.closest('.dshwv-usage-mask') || e.target.closest('.dshwv-resmask') || e.target.closest('.dshwv-custmenu') || e.target.closest('.dshwv-custbtn') || e.target.closest('.dshwv-fxinfo') || e.target.closest('.dshwv-fxicon')) return;
       }
       if (!isWhaleHit(e)) return;
@@ -11403,18 +11416,36 @@
     }
     function onDocContextMenu(e) {
       try {
-        if (!menuBtnHide) return;
+        if (e.target && e.target.closest('.chat-composer,.chat-reply,dialog')) return;
         if (e.target && e.target.closest) {
           if (e.target.closest('.dshwv-pop') || e.target.closest('.dshwv-menu') || e.target.closest('.dshwv-menu-btn') || e.target.closest('.dshwv-rolelist') || e.target.closest('.dshwv-audiolist') || e.target.closest('.dshwv-cropmask') || e.target.closest('.dshwv-confirmmask') || e.target.closest('.dshwv-audiomask') || e.target.closest('.dshwv-snapmask') || e.target.closest('.dshwv-bubmask') || e.target.closest('.dshwv-qedit') || e.target.closest('.dshwv-usagepanel') || e.target.closest('.dshwv-usage-mask') || e.target.closest('.dshwv-resmask') || e.target.closest('.dshwv-custmenu') || e.target.closest('.dshwv-custbtn')) return;
         }
         if (!isWhaleHit(e)) return;
         e.preventDefault();
-        toggleMenu();
+        if (e.shiftKey) { toggleMenu(); return; }
+        closeMenu();
+        window.dispatchEvent(new Event('whale-chat-open'));
       } catch (err) {}
     }
     document.addEventListener('pointerdown', onDocPointerDown, true);
     document.addEventListener('click', onDocClickStopper, true);
     document.addEventListener('contextmenu', onDocContextMenu, true);
+    window.addEventListener('whale-companion-move', function (e) {
+      var delta = Number(e.detail && e.detail.y);
+      if (!isFinite(delta)) return;
+      // Reserve space using the final position, avoiding repeated corrections
+      // based on the intermediate frames of a positioning transition.
+      var transition = positioner.style.transition;
+      positioner.style.transition = 'none';
+      state.top = clamp(state.top + delta, 0, Math.max(0, viewport().h - root.offsetHeight));
+      express();
+      positioner.getBoundingClientRect();
+      positioner.style.transition = transition;
+    });
+    window.addEventListener('whale-companion-reply', function () {
+      if (bubbleScene && bubbleScene.kind === 'approval') return;
+      hideBubble();
+    });
     var widgetCursor = '';
     function setWidgetCursor(v) {
       if (v !== widgetCursor) {

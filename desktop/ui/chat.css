@@ -1,0 +1,37 @@
+.chat-composer,.chat-reply{position:fixed;z-index:10100;color:#203170;pointer-events:auto;font-size:13px;letter-spacing:0;user-select:text;-webkit-user-select:text}
+.chat-composer{width:min(360px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;background:#fff;border:1px solid #b6c0d9;border-radius:8px;padding:10px;box-shadow:0 4px 18px #20317026}
+.chat-header{display:flex;align-items:center;gap:8px;min-height:24px;margin-bottom:7px;white-space:nowrap}
+.chat-header strong{font-size:13px;margin-right:auto}
+.chat-header button{font-size:11px;border:0;background:none;color:#536ba9;padding:3px;flex-shrink:0}
+.chat-header .icon-button{font-size:20px;width:22px;height:24px;padding:0}
+.chat-conversations{max-height:160px;overflow:auto;margin-bottom:8px;border-bottom:1px solid #d3daeb;overscroll-behavior:contain}
+.chat-conversation{display:flex;align-items:center;gap:6px;border-top:1px solid #edf0f6;min-height:45px}
+.chat-conversation:first-child{border-top:0}
+.chat-conversation button{border:0;background:none;color:#536ba9;font:inherit;font-size:11px;padding:5px;flex-shrink:0}
+.chat-conversation .chat-conversation-open{flex:1;min-width:0;flex-shrink:1;text-align:left;display:flex;flex-direction:column;gap:3px}
+.chat-conversation-open strong{font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.chat-conversation-open small{font-size:10px;color:#8292b0}
+.chat-conversation-open[aria-current=true]{background:#edf4f3;color:#246359}
+.chat-conversation .chat-conversation-delete,.chat-conversation .chat-conversation-confirm{color:#a84349}
+.chat-conversation button:disabled{opacity:.5;cursor:default}
+.chat-composer textarea{display:block;width:100%;resize:none;min-height:48px;max-height:120px;margin:0;padding:8px;border:1px solid #d3daeb;border-radius:6px;font:inherit;line-height:1.5;background:#f9faff;color:#203170;user-select:text}
+.chat-composer textarea:focus{outline:2px solid #9bb4d6;outline-offset:1px}
+.chat-footer{display:flex;align-items:center;gap:8px;margin-top:8px;min-height:28px}
+.chat-footer-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.chat-billing{display:flex;align-items:center;flex-wrap:wrap;gap:2px 10px;min-height:16px;font-size:10px;color:#536ba9;line-height:1.5}
+.chat-billing span{overflow-wrap:anywhere}
+.chat-billing-refresh{width:18px;height:18px;flex-shrink:0;border:0;padding:0;background:none;color:#536ba9;font-size:16px;line-height:1}
+.chat-footer [role=status]{font-size:11px;color:#697d9c;min-height:16px;min-width:0;overflow-wrap:anywhere}
+.chat-footer > button{flex-shrink:0;border:0;border-radius:6px;padding:5px 14px;color:white;background:#203170;font-size:12px}
+.chat-footer button:disabled{opacity:.5;cursor:default}
+.chat-history{max-height:150px;overflow:auto;border-bottom:1px solid #d3daeb;margin:0 0 8px;padding:0 4px 8px;overscroll-behavior:contain}
+.chat-message{margin:6px 0 10px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-message strong{font-size:11px;color:#8292b0}.chat-message div{margin-top:3px}
+.chat-reply{width:min(360px,calc(100vw - 16px));min-height:90px;max-height:420px;display:flex;flex-direction:column;padding:24px 24px 20px;border:3px solid #203170;border-radius:32px;background:#fff;box-shadow:0 3px 10px #20317020}
+.chat-reply{cursor:pointer}
+.chat-reply::after{content:"";position:absolute;bottom:-12px;left:62%;width:17px;height:13px;border:3px solid #203170;border-top:0;border-radius:0 0 12px 12px;background:#fff;pointer-events:none}
+.chat-reply .icon-button{position:absolute;right:12px;top:7px;width:20px;height:20px;font-size:20px}
+.chat-output{overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65;min-height:0;font-size:14px;overscroll-behavior:contain}
+.chat-reply.companion-covered{visibility:hidden;pointer-events:none}
+#chat-settings textarea{width:100%;min-height:120px;resize:vertical;margin-top:6px;border:1px solid #d9e4e1;border-radius:8px;padding:10px 11px;font:inherit;font-size:12px;color:#244950;line-height:1.6}
+#chat-settings textarea:focus{outline:2px solid #b3d3cf}#chat-key-state{font-size:11px;color:#7b8f93;margin-top:6px}

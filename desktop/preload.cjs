@@ -27,6 +27,7 @@ ipcRenderer.on('whale-command', (_event, command) => {
   const events = {
     balance: 'whale-refresh',
     usage: 'whale-open-usage',
+    chat: 'whale-chat-open',
     settings: 'whale-open-settings',
   };
   if (events[command]) window.dispatchEvent(new Event(events[command]));

@@ -8,6 +8,7 @@ import { createWidgetHost } from '../lib/widget-host.mjs';
 import { migrateData, stripRetiredModules } from './migration.mjs';
 import { createFxService } from './fx.mjs';
 import { MEDIA_POLICY } from '../lib/media-validation.mjs';
+import { ChatService } from './chat/service.mjs';
 
 export const UI_ORIGIN = 'whale://widget';
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.gif': 'image/gif', '.mp3': 'audio/mpeg' };
@@ -15,7 +16,7 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inl
 const jsonResult = (status, payload) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8' }, body: Buffer.from(JSON.stringify(payload)) });
 
 // Dispatch original resource handlers entirely in process; no HTTP listener exists.
-export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVault = null, monitor = true, autoRefresh = true, fetchImpl, fxFetchImpl = fetchImpl, onStop = () => {}, onShow = () => {}, statusInfo = () => ({}) } = {}) {
+export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVault = null, monitor = true, autoRefresh = true, fetchImpl, fxFetchImpl = fetchImpl, chatFetchImpl = fetchImpl, onStop = () => {}, onShow = () => {}, statusInfo = () => ({}) } = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
   migrateData(dataDir);
   const whale = service || new WhaleService({ dataDir, secretVault, ...(fetchImpl ? { fetchImpl } : {}) });
@@ -33,13 +34,14 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
   const stateFile = path.join(dataDir, 'ui-state.json');
   const buildVersion = readJson(path.join(ROOT, '.codex-plugin', 'plugin.json'), {}).version || VERSION;
   let closing = false, closeJob = null;
+  let chat = null;
 
-  async function dispatch(route, { method = 'GET', body = null, headers = {} } = {}) {
-    const result = await run(route, { method, body, headers });
+  async function dispatch(route, { method = 'GET', body = null, headers = {}, signal } = {}) {
+    const result = await run(route, { method, body, headers, signal });
     result.headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': CSP, ...result.headers };
     return result;
   }
-  async function run(route, { method, body, headers }) {
+  async function run(route, { method, body, headers, signal }) {
     try {
       if (closing) return jsonResult(503, { ok: false, error: '挂件正在退出，请稍后重新打开' });
       if (typeof route !== 'string' || !route.startsWith('/') || route.startsWith('//') || /[\\\x00-\x1f]/.test(route)) return jsonResult(400, { ok: false, error: '无效的本地操作' });
@@ -48,6 +50,11 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
       const bytes = body == null ? Buffer.alloc(0) : Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
       if (bytes.length > 32 * 1024 * 1024) return jsonResult(413, { ok: false, error: '导入文件过大' });
       const parsed = () => JSON.parse(bytes.toString('utf8') || '{}');
+      if (url.pathname.startsWith('/api/chat/')) {
+        if (bytes.length > 128 * 1024) return jsonResult(413, { ok: false, error: '会话请求过大' });
+        chat ||= new ChatService({ dataDir, secretVault, ...(chatFetchImpl ? { fetchImpl: chatFetchImpl } : {}) });
+        return chat.dispatch(url, { method, body: bytes, signal });
+      }
       if (url.pathname === '/api/status' && method === 'GET') return jsonResult(200, { ok: true, version: VERSION, buildVersion, transport: 'local-ipc', webpage: false, provider: whale.config.publicInfo(), monitor: watcher?.status() || { watching: 0, activeTurns: 0 }, subscriptionRateLimits: whale.subscriptionRateLimits(), dataDir, ...statusInfo() });
       if (url.pathname === '/api/subscription-rate-limits' && method === 'GET') return jsonResult(200, whale.subscriptionRateLimits());
       if (url.pathname === '/api/config') {
@@ -102,9 +109,10 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
       }
       if (url.pathname === '/api/show' && method === 'POST') { onShow(); return jsonResult(200, { ok: true, desktop: 'shown' }); }
       if (url.pathname === '/api/stop' && method === 'POST') { setTimeout(onStop, 100); return jsonResult(200, { ok: true }); }
-      const uiFiles = { '/': 'widget.html', '/widget.html': 'widget.html', '/client.js': 'client.js', '/ui.css': 'ui.css', '/render.js': 'render.js', '/input.js': 'input.js', '/alpha-worker.js': 'alpha-worker.js', '/money.js': 'money.js', '/media-guard.js': 'media-guard.js', '/turn-notice.js': 'turn-notice.js', '/usage-client.js': 'usage-client.js', '/usage-presentation.js': 'usage-presentation.js' };
+      const uiFiles = { '/': 'widget.html', '/widget.html': 'widget.html', '/client.js': 'client.js', '/ui.css': 'ui.css', '/render.js': 'render.js', '/input.js': 'input.js', '/alpha-worker.js': 'alpha-worker.js', '/money.js': 'money.js', '/media-guard.js': 'media-guard.js', '/turn-notice.js': 'turn-notice.js', '/usage-client.js': 'usage-client.js', '/usage-presentation.js': 'usage-presentation.js', '/companion-display.js': 'companion-display.js', '/chat.js': 'chat.js', '/chat-client.js': 'chat-client.js', '/chat-stream.js': 'chat-stream.js', '/chat-billing.js': 'chat-billing.js', '/chat.css': 'chat.css' };
       let file;
       if (Object.hasOwn(uiFiles, url.pathname)) file = path.join(ROOT, 'desktop', 'ui', uiFiles[url.pathname]);
+      else if (/^\/vendor\/eventsource-parser\/dist\/(index|parse|errors|types|stream)\.js$/.test(url.pathname)) file = path.join(ROOT, url.pathname.slice(1));
       else if (url.pathname.startsWith('/assets/')) {
         const name = decodeURIComponent(url.pathname.slice(8));
         if (!/^[A-Za-z0-9_.-]+$/.test(name) || !MIME[path.extname(name)]) return jsonResult(404, { ok: false });
@@ -135,6 +143,7 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
     closing = true; clearInterval(timer);
     closeJob = (async () => {
       const failures = [];
+      try { await chat?.close(); } catch (error) { failures.push(error); }
       try { await fx.close(); } catch (error) { failures.push(error); }
       try { await watcher?.stop({ timeoutMs: 1200 }); } catch (error) { failures.push(error); }
       try { await whale.close?.({ timeoutMs: 3000 }); } catch (error) { failures.push(error); }

@@ -3,17 +3,17 @@
 > 本仓库分支 **For-Codex**：把 [DSH 网页版小鲸鱼](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（`dsh-whale-widget`）改造成 **Codex 桌面应用**的伴随挂件。
 > ⚠️ 与主分支用途不同：**这是 Codex 桌面插件，不能用 `dsh plugin … add` 装进 DSH 网页**；反过来，主分支的 DSH 网页插件也不能在 Codex 里运行。
 
-版本 **0.2.5**（Codex 特化线）。基于 MeteorNOX 的 **dsh-whale-widget 0.3.0-beta** 改编。小鲸鱼是独立常驻桌面宠物：登录后自动启动，不绑定 Codex 窗口，也不会因 Codex 最小化或退出而隐藏。可拖动并记忆位置，使用托盘菜单或快捷键随时隐藏／显示。
+版本 **0.2.6**（Codex 特化线）。基于 MeteorNOX 的 **dsh-whale-widget 0.3.0-beta** 改编。小鲸鱼是独立常驻桌面宠物：登录后自动启动，不绑定 Codex 窗口，也不会因 Codex 最小化或退出而隐藏。可拖动并记忆位置，使用托盘菜单或快捷键随时隐藏／显示。
 
 **本版没有独立网页、浏览器面板或本地网页端口。** 界面由透明辅助窗口承载，通过本地进程间通信读取数据。所有菜单、设置、素材和账本都在挂件中操作。它并未修改或注入 Codex 的安装文件。
 
-**0.2.5 开发基线**：自由桌面、多 API 数据源、订阅额度显示、持续审批提醒与可选自定义音效已整理进基线。详见 [0.2.5 变更说明](docs/CHANGELOG-0.2.5.md)；源码回退见 [基线与回退](docs/BASELINE-0.2.5.md)。
+**0.2.6 本地版本**：增加独立角色会话、会话列表、DeepSeek 会话计费、Ctrl+0 快捷键，并复核订阅气泡布局。详见 [0.2.6 变更说明](docs/CHANGELOG-0.2.6.md)。此前的 [0.2.5 开发基线](docs/CHANGELOG-0.2.5.md)仍可回退。
 
-**安装与回滚**：macOS 见 [安装说明](docs/MACOS.md)，Windows 的安装背景见 [0.2.4 安装与回滚说明](docs/INSTALL-AND-ROLLBACK-0.2.4.md)。当前基线的验证范围和已知限制见 [0.2.5 验证报告](docs/VERIFICATION-0.2.5.md)。
+**安装与回滚**：macOS 见 [安装说明](docs/MACOS.md)，Windows 的安装背景见 [0.2.4 安装与回滚说明](docs/INSTALL-AND-ROLLBACK-0.2.4.md)。0.2.6 的验证范围和已知限制见 [本版变更说明](docs/CHANGELOG-0.2.6.md)，原有基线见 [0.2.5 验证报告](docs/VERIFICATION-0.2.5.md)。
 
 **运行平台**：Windows 10/11 x64，或 Apple Silicon / Intel Mac；需要 Node.js 24+。挂件本身不依赖 Codex 桌面应用运行；安装 Codex 后才能在本机会话记录中观察 Codex token 用量。详细步骤见 [macOS 安装说明](docs/MACOS.md)。
 
-**安全说明**：挂件从本机 Codex 配置、指定环境变量或 macOS 本地加密存储读取密钥；本地解析配置但不会返回或记录原始 `config.toml` / `auth.json` 内容。密钥只会发送给用户配置的 API provider；挂件还会访问公开汇率接口，不发送聊天内容。
+**安全说明**：挂件从本机 Codex 配置、指定环境变量或 macOS 本地加密存储读取密钥；本地解析配置但不会返回或记录原始 `config.toml` / `auth.json` 内容。密钥只会发送给用户配置的 API provider；挂件还会访问公开汇率接口。独立角色会话只将你在会话窗口输入的消息、角色人设与该会话上下文发送给配置的聊天接口，不发送 Codex 聊天内容。
 
 余额跟随最近活动会话对应的 API 数据源；密钥留在本机，界面不回显已保存的密钥。若本机 Codex App 会话记录含有有效的 `codex` 订阅限额快照，小鲸鱼会优先显示 **5 小时与 7 天剩余百分比**；这仍不是 API 余额，也不会显示订阅价格或聊天费用。
 
@@ -23,6 +23,9 @@
 - 点击鲸鱼：显示余额，或在检测到 Codex App 订阅快照时显示 **5 小时剩余 / 7 天剩余 / 5 小时重置时间**；按住拖动：移动位置并记忆；移到边缘：按原设置吸附、翻转。
 - 个人 ChatGPT 账户的 Codex 对话完成时，若该轮带有完整订阅快照，自动完成提示也显示 **5 小时剩余** 与 **7 天剩余**，而非“金额未知”和 token；工作 API Key 会话继续显示原有 API 金额／token 提示。
 - 鼠标移到鲸鱼上，点击 **☰**：选择角色、大小、音效、气泡、吸附、资源管理、API 设置和用量记录。
+- 右键角色：在角色下方打开会话并聚焦输入；Enter 发送，Shift+Enter 换行。菜单中的 **会话设置** 配置会话 API 地址、模型、key、人设与最长回复 token 数。回复气泡随流式内容增长，支持停止、记录和新会话。详见 [角色会话](docs/CHAT.md)。Shift+右键仍可打开挂件菜单。
+- 角色会话支持 **会话列表、新建、继续旧会话和单独删除**；macOS 按 Ctrl+0 可全局打开并聚焦输入框。旧记录自动迁移，各会话上下文独立，删除会话保留消费。
+- DeepSeek 官方角色会话在发送按钮左侧显示 **本地近 30 天消费估算与账号余额**，支持手动刷新。消费取估算上下限平均值并保留两位小数，来自本地聊天调用及可恢复的历史用量，独立保存；不并入 Codex 账本，也不代表官网账号总消费。
 - Codex 请求权限时，提醒气泡会一直显示，点击气泡或鲸鱼后关闭；菜单中的“审批提醒音效”可单独关闭或选用已导入的音频片段／音效组。
 - **Windows：Ctrl+Alt+W；macOS：Cmd+Option+W**，也可使用系统托盘菜单：隐藏/显示。托盘和鲸鱼 `☰` 菜单中的“命令”区域可刷新余额、查看用量记录、查看运行状态或停止当前挂件。
 - 新建 Codex 任务后可说“打开小鲸鱼”“查看当前 API 余额”。更新前已打开的任务可能仍持有旧版工具，需新建任务。
@@ -47,7 +50,7 @@ Windows 使用任务计划服务，macOS 使用用户级 LaunchAgent。桌面服
 
 - `停用自动跟随.cmd`：停止监视器与挂件并移除开机启动项，保留设置、素材和账本。
 - `停止挂件服务.cmd` / `启动桌面挂件.cmd`：仅停止或启动当前挂件进程。
-- 源码回退使用固定 Git 标签，具体步骤见 [0.2.5 基线与回退](docs/BASELINE-0.2.5.md)；用户数据须单独备份。
+- 源码回退使用固定 Git 标签；当前版本为 `codex-v0.2.6`，此前的步骤见 [0.2.5 基线与回退](docs/BASELINE-0.2.5.md)。用户数据须单独备份。
 
 macOS 对应入口为 `安装 Mac 自动跟随.command`、带鲸鱼图标的 `启动桌面挂件.app`（或兼容入口 `启动桌面挂件.command`）、`停止挂件服务.command`、`停用自动跟随.command`；也可运行 `npm run install:mac`、`npm run uninstall:mac`。
 
@@ -71,7 +74,7 @@ macOS 对应入口为 `安装 Mac 自动跟随.command`、带鲸鱼图标的 `�
 
 Windows 本机源码通常位于 `%USERPROFILE%\plugins\api-balance-whale`，挂件数据默认位于 `%USERPROFILE%\.codex\whale-widget`。macOS 本机源码通常位于 `~/plugins/api-balance-whale`，挂件数据默认位于 `~/.codex/whale-widget`。设置 `CODEX_HOME` 或 `WHALE_HOME` 时使用对应目录；插件缓存更新不会覆盖用户素材与账本。
 
-数据目录包含角色、气泡图片、音频、设置、账本、窗口状态、桌面服务配置和非敏感订阅额度快照。`api-settings.json` 只保存接口设置和密钥环境变量名称，不保存密钥。仅处理 Codex 的用量与任务状态，不上传聊天内容。
+数据目录包含角色、气泡图片、音频、设置、账本、窗口状态、桌面服务配置和非敏感订阅额度快照。`api-settings.json` 只保存接口设置和密钥环境变量名称，不保存密钥。Codex 监控仅处理用量与任务状态；独立角色会话使用自己的 `chat-settings.json`、`chat-history.json` 和 `chat-billing.json`，密钥不写入这些文件。
 
 素材限制、保存失败和损坏索引的保护见 [0.2.4 变更说明](docs/CHANGELOG-0.2.4.md) 与 [渲染实现](docs/RENDERING.md)。新导入受真实格式、尺寸/帧数及总量预算约束；已有素材不因超过新限制而被自动删除。
 
@@ -101,14 +104,17 @@ package.json                包信息与快捷脚本
 assets/                     whale-widget.js（挂件前端 bundle）+ 角色/气泡/音效素材
 desktop/                    Electron 主进程、预加载、桌面服务监督器、页面脚本
 desktop/ui/usage-*.js       前端用量请求与展示适配（见 docs/USAGE-DISPLAY.md）
+desktop/ui/chat*.js         会话输入、流式读取、计费展示与显示定位（见 docs/CHAT.md）
 desktop/macos/              macOS LaunchAgent 监督器（保留旧版窗口探针兼容代码）
 runtime/                    余额与用量服务：配置解析、provider、账本、汇率、会话监视、MCP、IPC
+runtime/chat/               独立角色会话、历史迁移、DeepSeek 请求与计费
 lib/                        素材校验、资源库、widget 宿主
 scripts/                    安装/启动/停止/卸载/回滚与启动器编译
 tests/                      关键行为测试与隔离桌面验证夹具
 skills/                     Codex 技能说明（会话内调用 whale_* 工具）
 docs/                       变更说明、验证报告、安装与回滚、迁移记录、渲染实现、原版说明
 vendor/smol-toml            内置 TOML 解析（BSD-3-Clause）
+vendor/eventsource-parser   内置流式事件解析（MIT）
 ```
 
 ## 给维护者：本分支包含什么

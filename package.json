@@ -1,6 +1,6 @@
 {
   "name": "api-balance-whale",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Codex API balance desktop companion: an independent, hideable desktop pet with no standalone webpage (Codex-adapted build of dsh-whale-widget). Homepage and issues: https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget (branch For-Codex).",
   "type": "module",
   "license": "MIT",

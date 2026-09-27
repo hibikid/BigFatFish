@@ -1,9 +1,30 @@
 <!doctype html>
 <html lang="zh-CN" class="desktop">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>API 余额小鲸鱼</title><link rel="stylesheet" href="/ui.css">
+<title>API 余额小鲸鱼</title><link rel="stylesheet" href="/ui.css"><link rel="stylesheet" href="/chat.css">
 <script src="/client.js" defer></script><script src="/money.js" defer></script><script src="/render.js" defer></script><script src="/media-guard.js" defer></script><script src="/turn-notice.js" defer></script><script src="/usage-presentation.js" defer></script><script src="/usage-client.js" defer></script><script src="/dsh-whale/widget.js" defer></script><script src="/input.js" defer></script>
+<script type="module" src="/chat.js"></script>
 </head><body>
+  <section id="chat-composer" class="chat-composer" aria-label="角色会话" hidden>
+    <header class="chat-header"><strong>会话</strong><button id="chat-show-conversations" type="button" aria-expanded="false" aria-controls="chat-conversations">列表</button><button id="chat-show-history" type="button" aria-expanded="false" aria-controls="chat-history">记录</button><button id="chat-new" type="button" title="建立新会话并保留旧会话">新会话</button><button id="chat-open-settings" type="button">会话设置</button><button id="chat-close" type="button" class="icon-button" aria-label="关闭会话" title="关闭会话">×</button></header>
+    <div id="chat-conversations" class="chat-conversations" aria-label="会话列表" hidden></div>
+    <div id="chat-history" class="chat-history" hidden></div>
+    <textarea id="chat-input" aria-label="消息" rows="2" maxlength="16000"></textarea>
+    <footer class="chat-footer"><div class="chat-footer-info"><div id="chat-billing" class="chat-billing" aria-label="会话消费与余额"><span data-chat-spent>本地30天 --</span><span data-chat-balance>余额 --</span><button type="button" class="chat-billing-refresh" aria-label="刷新会话消费与余额" title="刷新会话消费与余额">↻</button></div><span id="chat-status" role="status"></span></div><button id="chat-stop" type="button" hidden>停止</button><button id="chat-send" type="button">发送</button></footer>
+  </section>
+  <section id="chat-reply" class="chat-reply" aria-label="角色回复" hidden><button id="chat-reply-close" type="button" class="icon-button" aria-label="收起回复" title="收起回复">×</button><div id="chat-output" class="chat-output" role="log" aria-live="off" aria-busy="false"></div></section>
+  <dialog id="chat-settings" aria-labelledby="chat-settings-title">
+    <form id="chat-settings-form">
+      <header class="dialog-header"><h2 id="chat-settings-title">会话设置</h2><button id="chat-settings-close" type="button" class="icon-button" aria-label="关闭会话设置">×</button></header>
+      <div id="chat-settings-error" class="notice" role="alert" hidden></div>
+      <label>会话 API 地址<input name="baseUrl" type="url" required placeholder="https://api.example.com/v1" autocomplete="off"></label>
+      <div class="field-grid"><label>模型名称<input name="model" required maxlength="200" autocomplete="off"></label><label>API key<input name="apiKey" type="password" autocomplete="new-password" maxlength="16384"></label></div>
+      <div id="chat-key-state"></div>
+      <label>角色人设<textarea name="persona" maxlength="16000" rows="5"></textarea></label>
+      <label>最长回复长度（输出 token）<input name="maxTokens" type="number" min="1" max="32768" step="1" required></label>
+      <div class="dialog-actions"><button id="chat-settings-cancel" type="button" class="quiet">取消</button><button id="chat-settings-save" type="submit" class="primary">保存设置</button></div>
+    </form>
+  </dialog>
   <dialog id="settings-dialog" aria-labelledby="settings-title">
     <form id="settings-form">
       <header class="dialog-header"><div><h2 id="settings-title">API 数据源与设置</h2><p>小鲸鱼独立常驻桌面；当前余额与多个 Codex API 消耗可分别记录。</p></div><button type="button" id="close-settings" class="icon-button" aria-label="关闭 API 设置">×</button></header>

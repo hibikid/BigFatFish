@@ -81,6 +81,7 @@ function sendCommand(command) {
   else if (!pendingCommands.includes(command)) pendingCommands.push(command);
   return true;
 }
+function openChatShortcut() { sendCommand('chat'); }
 function flushCommands() {
   if (!rendererReady || !window || window.isDestroyed()) return;
   for (const command of pendingCommands.splice(0)) window.webContents.send('whale-command', command);
@@ -226,7 +227,7 @@ else {
     session.defaultSession.protocol.handle('whale', async request => {
       const url = new URL(request.url);
       if (url.host !== 'widget') return new Response('', { status: 403 });
-      const result = await dispatcher.dispatch(url.pathname + url.search, { method: request.method, body: ['GET', 'HEAD'].includes(request.method) ? null : Buffer.from(await request.arrayBuffer()), headers: Object.fromEntries(request.headers) });
+      const result = await dispatcher.dispatch(url.pathname + url.search, { method: request.method, body: ['GET', 'HEAD'].includes(request.method) ? null : Buffer.from(await request.arrayBuffer()), headers: Object.fromEntries(request.headers), signal: request.signal });
       return new Response(request.method === 'HEAD' ? null : result.body, { status: result.status, headers: result.headers });
     });
     const firstBounds = freeDesktop ? null : initialHost?.bounds;
@@ -249,10 +250,10 @@ else {
     window.setIgnoreMouseEvents(true, { forward: true });
     window.on('show', () => { invalidate(); sendCursor(true); });
     window.on('resize', invalidate);
-    let syncDesktop = null;
+    let syncDesktop = null, testViewport = false;
     if (freeDesktop) {
       const syncBounds = desktopBoundsSync(screen, window);
-      syncDesktop = () => { if (syncBounds()) { invalidate(); sendCursor(true); } };
+      syncDesktop = () => { if (!testViewport && syncBounds()) { invalidate(); sendCursor(true); } };
       for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) screen.on(event, syncDesktop);
       app.once('will-quit', () => {
         for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) screen.off(event, syncDesktop);
@@ -310,9 +311,11 @@ else {
     app.once('will-quit', () => { clearInterval(cursorPoll); clearInterval(visibilityWatchdog); visibilityWatchdog = null; });
     const icon = nativeImage.createFromPath(path.join(root, 'assets', 'DSniang1.png')).resize({ width: 24, height: 24 });
     tray = new Tray(icon); tray.setToolTip(freeDesktop ? 'API 余额小鲸鱼 · 自由桌面' : 'API 余额小鲸鱼 · 跟随 Codex');
+    const chatShortcutAvailable = isMac && globalShortcut.register('Control+0', openChatShortcut);
     const trayTemplate = [{ label: '显示 / 隐藏小鲸鱼', click: toggle }];
     if (isMac) {
       trayTemplate.push({ label: '命令', submenu: [
+        { label: chatShortcutAvailable ? '打开会话（Ctrl+0）' : '打开会话（Ctrl+0 被占用）', click: openChatShortcut },
         { label: '刷新余额', accelerator: 'Command+R', click: () => sendCommand('balance') },
         { label: '查看用量记录', click: () => sendCommand('usage') },
         { label: '查看运行状态', click: () => { void showStatusDialog(); } },
@@ -334,7 +337,7 @@ else {
     if (fixture) {
       const fixtureModule = process.env.WHALE_DESKTOP_AUDIT === '1' ? 'desktop-audit-fixture.mjs' : 'desktop-fixture.mjs';
       const { verifyDesktop } = await import(pathToFileURL(path.join(root, 'tests', fixtureModule)));
-      await verifyDesktop({ app, window, screen, setHost, setTestCursor, dispatcher, dataDir, errors: rendererErrors, openedLinks: fixtureOpenedLinks, renderInfo: () => ({ gpuStatus, presents, inputEnabled, keyboardFocus }) });
+      await verifyDesktop({ app, window, screen, setHost, setTestCursor, setTestViewport: bounds => { testViewport = !!bounds; if (bounds) window.setBounds(bounds); else syncDesktop?.(); }, dispatcher, dataDir, errors: rendererErrors, openedLinks: fixtureOpenedLinks, activateChatShortcut: openChatShortcut, chatShortcutAvailable, renderInfo: () => ({ gpuStatus, presents, inputEnabled, keyboardFocus }) });
     }
     else if (!freeDesktop) { const heartbeat = setInterval(() => { if (Date.now() - hostHeartbeat > 6000) app.quit(); }, 2000); app.once('will-quit', () => clearInterval(heartbeat)); }
   }).catch(error => { try { save(path.join(dataDir, 'desktop-error.json'), { message: String(error.message).slice(0, 350), at: new Date().toISOString() }); } catch {} app.exit(1); });

@@ -9,7 +9,7 @@ const electron = process.env.WHALE_ELECTRON_PATH || path.join(DATA_HOME, 'deskto
 if (!fs.existsSync(electron)) throw new Error('Install the desktop component or set WHALE_ELECTRON_PATH to its executable.');
 const outputParent = path.resolve(process.argv[2] || path.join(ROOT, 'qa-output'));
 fs.mkdirSync(outputParent, { recursive: true });
-const output = fs.mkdtempSync(path.join(outputParent, 'desktop-0.2.5-'));
+const output = fs.mkdtempSync(path.join(outputParent, 'desktop-0.2.6-'));
 // Keep Unix socket paths short and isolate both Electron storage and Codex data.
 const temp = fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/private/tmp' : os.tmpdir(), 'wd-'));
 const dataDir = path.join(temp, 'data'), codexHome = path.join(temp, 'codex');
@@ -23,7 +23,7 @@ async function run(phase) {
   let logs = '', timedOut = false;
   child.stdout.on('data', chunk => { logs += chunk; });
   child.stderr.on('data', chunk => { logs += chunk; });
-  const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, 60000);
+  const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, 90000);
   const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).finally(() => clearTimeout(timer));
   fs.writeFileSync(path.join(output, phase + '.log'), logs);
   if (timedOut || code !== 0 || !fs.existsSync(path.join(output, phase + '.json'))) {
