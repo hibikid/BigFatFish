@@ -12,6 +12,16 @@ export const POMODORO_TOOLS = Object.freeze([
   { type: 'function', function: { name: 'pomodoro_control', description: 'Control the current Pomodoro. Use only when the user asks or answers a phase reminder.', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['pause', 'resume', 'start_break', 'start_focus', 'extend_focus', 'stop'] }, minutes: { type: 'integer', minimum: 1, maximum: 60 } }, required: ['action'], additionalProperties: false } } },
   { type: 'function', function: { name: 'pomodoro_status', description: 'Read the current Pomodoro state when needed to answer the user.', parameters: { type: 'object', properties: {}, additionalProperties: false } } },
 ]);
+export const POMODORO_POLICY = '番茄钟工具已经预授权，会在本地立即执行。仅用于用户请求设置或控制计时、回应计时提醒；日常闲聊不要调用。可偶尔按情况建议合理的专注与休息时长，或询问缺失的信息。深夜请求开始番茄钟时，可以依人设先劝休息、建议缩短，或询问用户是否仍想继续；选择先询问时不要调用设置工具，用户明确坚持后可以执行。调用成功后说明实际安排；调用失败不要宣称已执行。';
+
+// Keeps a generated reply that still applies: commits it to history when the
+// generator supports that, and yields null if there is no text or the commit fails.
+function settle(generated) {
+  if (typeof generated === 'string') return generated ? { text: generated } : null;
+  if (!generated?.text) return null;
+  try { return { text: generated.text, conversationId: generated.commit ? generated.commit() : generated.conversationId }; }
+  catch { return null; }
+}
 
 export class ChatActivity {
   constructor({ dataDir, now = Date.now, random = Math.random, onProactive = async () => null, onReminder = async () => null, onNotice = () => {}, canProactive = () => true, startTimer = true }) {
@@ -122,7 +132,8 @@ export class ChatActivity {
           const generated = await this.onReminder({ ...this.pomodoro, fallback }).catch(() => null);
           if (this.closed || this.pomodoro.planId !== timer.planId || this.pomodoro.phase !== next || this.pomodoro.cycle !== timer.cycle || this.pomodoro.reminderId !== reminderId) return;
           const advance = next === 'completed' ? null : { planId: timer.planId, reminderId, phase: next, cycle: timer.cycle };
-          this.notice('pomodoro', (typeof generated === 'string' ? generated : generated?.text) || fallback, generated?.conversationId || timer.conversationId, advance);
+          const reply = settle(generated);
+          this.notice('pomodoro', reply?.text || fallback, reply?.conversationId || timer.conversationId, advance);
         })());
       }
       if (now - this.lastProactiveCheck >= 30000) {
@@ -137,7 +148,8 @@ export class ChatActivity {
             jobs.push((async () => {
               try {
                 const generated = await this.onProactive().catch(() => null);
-                if (!this.closed && generated?.text && ['idle', 'completed'].includes(this.pomodoro.phase)) this.notice('proactive', generated.text, generated.conversationId);
+                const reply = !this.closed && ['idle', 'completed'].includes(this.pomodoro.phase) ? settle(generated) : null;
+                if (reply) this.notice('proactive', reply.text, reply.conversationId);
                 else { this.dailyCount--; this.persist(); }
               } finally { this.proactiveJob = false; }
             })());

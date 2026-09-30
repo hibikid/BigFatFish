@@ -230,3 +230,39 @@ test('chat and automatic replies receive fresh local time without persisting it 
   assert.match(requests[3].messages[1].content, /2026-09-28 21:00/);
   assert.equal(requests[3].tools, undefined);
 });
+
+test('a background reply that became stale while generating is neither shown nor kept in conversation history, but is still billed', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-stale-reply-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const local = new Date(); local.setHours(10, 0, 0, 0);
+  let now = local.getTime(), release = null;
+  const service = new ChatService({ dataDir, activityOptions: { now: () => now, random: () => 0.9, startTimer: false }, fetchImpl: async (url) => {
+    if (url.endsWith('/user/balance')) return Response.json({ balance_infos: [{ currency: 'CNY', total_balance: '10' }] });
+    await new Promise(resolve => { release = resolve; });
+    return sse([{ choices: [{ index: 0, delta: { content: '过期的角色回复' } }] }, { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage }]);
+  } });
+  t.after(() => service.close());
+  service.save({ baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: 'synthetic-key', persona: '你是大肥鱼', maxTokens: 256 });
+  const conversationId = service.history().conversationId;
+  const generating = async () => { while (!release) await new Promise(resolve => setImmediate(resolve)); };
+  const finish = () => { const done = release; release = null; done(); };
+
+  service.activity.tool(tool('pomodoro_set', { focusMinutes: 1, breakMinutes: 1, cycles: 2 }), conversationId);
+  now += 60000; const reminder = service.activity.tick();
+  await generating();
+  service.activity.tool(tool('pomodoro_control', { action: 'start_break' }), conversationId);
+  finish(); await reminder;
+
+  service.activity.tool(tool('pomodoro_control', { action: 'stop' }), conversationId);
+  service.activity.saveSettings({ enabled: true, start: '09:00', end: '21:00', minMinutes: 15, maxMinutes: 15, dailyLimit: 1 });
+  now += 20 * 60000; const proactive = service.activity.tick();
+  await generating();
+  service.activity.tool(tool('pomodoro_set', { focusMinutes: 25, breakMinutes: 5, cycles: 2 }), conversationId);
+  finish(); await proactive;
+
+  assert.deepEqual(service.activity.snapshot().notices, []);
+  assert.equal(service.conversations.allTurns().length, 0, 'stale replies must not be written to any conversation');
+  assert.equal(service.history().conversations.length, 1, 'a stale proactive reply must not create the spontaneous conversation');
+  assert.equal(service.activity.dailyCount, 0, 'the unused proactive attempt is refunded');
+  assert.equal((await service.billing.summary({ baseUrl: 'https://api.deepseek.com', key: 'synthetic-key' })).recorded, 2);
+});
