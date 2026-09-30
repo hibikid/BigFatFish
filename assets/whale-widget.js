@@ -27,6 +27,13 @@
       },
       onSource: function (source) { showUsageSource(source); }
     });
+    var bubbleQueue = WhaleBubbleQueue.create({
+      show: function (item) {
+        if (item.kind === 'cost') return sceneOpen('cost', function () { bubbleRenderCost(item.amount, item.notice); }, 0);
+        return sceneOpen(item.kind, function () { bubbleRenderModules(item.mods || []); }, 0);
+      },
+      hide: function () { closeBubbleScene(); }
+    });
     var SIZE_URL = '/dsh-whale/size.json';
     var IMG_URL = '/dsh-whale/image.png?v=2';
     var GIF_URL = '/dsh-whale/rua.gif';
@@ -7909,11 +7916,6 @@
     bubbleBox.appendChild(textBox);
     bubbleBox.addEventListener('click', function (e) {
       e.stopPropagation();
-      if (!bubbleShown) return;
-      if (costBubbleActive) {
-        hideCostBubble();
-        return;
-      }
       bubbleNext();
     });
     var body = document.createElement('div');
@@ -8111,7 +8113,6 @@
 
     var bubbleShown = false;
 
-    var bubbleRandomActive = false;
     var bubbleRandomLines = null;
     var BUBBLE_STYLE_CLASS = {
       A: 'dshwv-label',
@@ -8396,10 +8397,9 @@
       var entry = bubbleSceneEpoch;
       bubbleScene = { kind: kind, ttlMs: ttlMs || 0, firstSubscriptionQuota: !!(options && options.firstSubscriptionQuota) };
       bubbleShown = true;
-      costBubbleActive = kind === 'cost';
-      bubbleRandomActive = kind === 'random';
       // Build once at entry. Data callbacks cannot repaint either live buffer.
-      bubbleFrames.open(function (parts) {
+      // Resolves whether this scene is on screen.
+      return bubbleFrames.open(function (parts) {
         bubbleBuilding = true;
         bindBubbleParts(parts);
         try {
@@ -8411,33 +8411,22 @@
         bubbleBox.classList.add('dshwv-pop-open');
         WhaleRendering.presentFor(650);
       }).then(function (committed) {
-        if (entry !== bubbleSceneEpoch) return;
+        if (entry !== bubbleSceneEpoch) return false;
         bindBubbleParts(bubbleFrames.front);
         if (!committed) {
           bubbleScene = previousScene;
           bubbleShown = wasOpen;
-          costBubbleActive = !!previousScene && previousScene.kind === 'cost';
-          bubbleRandomActive = !!previousScene && previousScene.kind === 'random';
           if (!wasOpen) bubbleCloseVisual();
-          return;
+          return false;
         }
         WhaleMoney.refreshBindings(menuBox);
         if (ttlMs > 0) bubbleTtlTimer = setTimeout(bubbleAutoClose, ttlMs);
+        return true;
       });
     }
+    // System bubbles open without a time here; bubbleQueue closes them.
     function bubbleAutoClose() {
       bubbleTtlTimer = null;
-      if (bubbleScene && bubbleScene.kind === 'approval') return;
-      if (bubbleScene && bubbleScene.kind === 'cost') {
-        if (whaleSysSwapNext()) return;
-        hideCostBubble();
-        return;
-      }
-      if (bubbleScene && bubbleScene.kind === 'alert') {
-        if (whaleSysSwapNext()) return;
-        hideUsageAlertBubble();
-        return;
-      }
       hideBubble();
     }
     function bubbleResetTtl() {
@@ -9060,11 +9049,11 @@
     function whaleClick() {
       try {
         if (!bubbleOn) return;
-        if (bubbleScene && bubbleScene.kind === 'approval') {
-          hideUsageAlertBubble();
+        var notice = bubbleQueue.current();
+        if (notice) {
+          if (notice.kind === 'approval') bubbleQueue.dismiss();
           return;
         }
-        if (bubbleScene && (bubbleScene.kind === 'cost' || bubbleScene.kind === 'alert')) return;
         if (!bubbleShown) {
           bubbleRoundOn = true;
           bubbleSeqIdx = 0;
@@ -9083,14 +9072,7 @@
     function bubbleNext() {
       try {
         if (!bubbleShown) return;
-        if (bubbleScene && bubbleScene.kind === 'cost') {
-          hideCostBubble();
-          return;
-        }
-        if (bubbleScene && (bubbleScene.kind === 'alert' || bubbleScene.kind === 'approval')) {
-          hideUsageAlertBubble();
-          return;
-        }
+        if (bubbleQueue.dismiss()) return;
         if (bubbleRoundOn && bubbleSeqIdx < bubbleSeq.length) {
           bubbleShowSeqNext();
           return;
@@ -9098,27 +9080,17 @@
         hideBubble();
       } catch (err) {}
     }
-    function showBubble() {
-      if (!bubbleOn) return;
-      if (costBubbleActive) return;
-      bubbleRoundOn = true;
-      bubbleSeqIdx = 0;
-      bubbleShowSeqNext();
-    }
     function hideBubble() {
-      bubbleClearAll();
-      costBubbleActive = false;
-      whaleSysQueue = [];
-      whaleSysItem = null;
-      if (whaleSysTimer) clearTimeout(whaleSysTimer);
-      whaleSysTimer = null;
+      bubbleQueue.clear();
       bubbleRoundOn = false;
       bubbleSeqIdx = 0;
+      closeBubbleScene();
+    }
+    function closeBubbleScene() {
+      bubbleClearAll();
       bubbleScene = null;
       bubbleShown = false;
-      bubbleRandomActive = false;
       bubbleRandomLines = null;
-
       bubbleCloseVisual();
     }
     function showCostBubble(amount, notice) {
@@ -9161,116 +9133,16 @@
         ],
         ttlMs: 0
       };
-      if (whaleSysItem && whaleSysItem.kind !== 'approval') whaleSysQueue.unshift(whaleSysItem);
-      whaleSysItem = item;
-      sceneOpen('approval', function () { bubbleRenderModules(item.mods); }, 0);
-    }
-    function hideCostBubble() {
-      if (whaleSysSwapNext()) return;
-      bubbleClearAll();
-      costBubbleActive = false;
-      bubbleScene = null;
-      bubbleShown = false;
-      bubbleRandomActive = false;
-      bubbleRandomLines = null;
-      bubbleCloseVisual();
-      whaleSysDone();
+      bubbleQueue.approval(item);
     }
     var USAGE_ALERT_TTL = 6500;
-    var whaleSysQueue = [];
-    var whaleSysItem = null;
-    var whaleSysTimer = null;
+    // Queues a completion or usage alert; false when bubbles are off, so an
+    // alert can use its popup card instead.
     function whaleSysPush(item) {
-      try {
-        if (!bubbleOn || !bubbleBox || !textBox) return false;
-        if (costBubbleActive && !whaleSysItem) return false;
-        if (!item || !item.kind) return false;
-        var rank = Number(item.rank);
-        if (!(rank >= 1)) rank = 2;
-        item.rank = rank;
-        var pos = whaleSysQueue.length;
-        for (var i = 0; i < whaleSysQueue.length; i++) {
-          if (whaleSysQueue[i].rank > rank) {
-            pos = i;
-            break;
-          }
-        }
-        whaleSysQueue.splice(pos, 0, item);
-        if (whaleSysTimer) {
-          clearTimeout(whaleSysTimer);
-          whaleSysTimer = null;
-        }
-        whaleSysTimer = setTimeout(whaleSysTick, 30);
-        return true;
-      } catch (err) {
-        return false;
-      }
-    }
-    function whaleSysTick() {
-      whaleSysTimer = null;
-      try {
-        if (!bubbleOn || !bubbleBox || !textBox) {
-          whaleSysQueue = [];
-          whaleSysItem = null;
-          return;
-        }
-        if (whaleSysItem) return;
-        if (!whaleSysQueue.length) return;
-        if (costBubbleActive || bubbleScene && (bubbleScene.kind === 'alert' || bubbleScene.kind === 'approval')) return;
-        var item = whaleSysQueue.shift();
-        if (!item) return;
-        whaleSysItem = item;
-        if (item.kind === 'cost') {
-          sceneOpen('cost', function () {
-            bubbleRenderCost(item.amount, item.notice);
-          }, turnCostCloseMs > 0 ? turnCostCloseMs : 0);
-        } else {
-          sceneOpen('alert', function () {
-            bubbleRenderModules(item.mods || []);
-          }, item && item.ttlMs != null ? item.ttlMs : USAGE_ALERT_TTL);
-        }
-      } catch (err) {}
-    }
-    function whaleSysDone() {
-      try {
-        whaleSysItem = null;
-        if (whaleSysTimer) {
-          clearTimeout(whaleSysTimer);
-          whaleSysTimer = null;
-        }
-        whaleSysTick();
-      } catch (err) {}
-    }
-    function whaleSysSwapNext() {
-      try {
-        if (!whaleSysQueue.length || !bubbleOn || !bubbleShown) return false;
-        var item = whaleSysQueue.shift();
-        if (!item) return false;
-        whaleSysItem = item;
-        if (item.kind === 'cost') {
-          sceneOpen('cost', function () {
-            bubbleRenderCost(item.amount, item.notice);
-          }, turnCostCloseMs > 0 ? turnCostCloseMs : 0);
-        } else {
-          sceneOpen('alert', function () {
-            bubbleRenderModules(item.mods || []);
-          }, item && item.ttlMs != null ? item.ttlMs : USAGE_ALERT_TTL);
-        }
-        return true;
-      } catch (err) {
-        return false;
-      }
-    }
-    function hideUsageAlertBubble() {
-      if (whaleSysSwapNext()) return;
-      bubbleClearAll();
-      bubbleScene = null;
-      bubbleShown = false;
-      bubbleRandomActive = false;
-      bubbleRandomLines = null;
-
-      bubbleCloseVisual();
-      whaleSysDone();
+      if (!bubbleOn || !item || !item.kind) return false;
+      var ttlMs = item.kind === 'cost' ? turnCostCloseMs > 0 ? turnCostCloseMs : 0 : item.ttlMs != null ? item.ttlMs : USAGE_ALERT_TTL;
+      bubbleQueue.push(Object.assign({}, item, { ttlMs: ttlMs }));
+      return true;
     }
     function clamp(v, lo, hi) {
       return v < lo ? lo : v > hi ? hi : v;
@@ -9496,7 +9368,6 @@
     var bubbleOn = true;
     var turnCostOn = true;
     var turnCostCloseMs = 5000;
-    var costBubbleActive = false;
     var scrollGapOn = false;
     var scrollGapPx = 17;
     var menuBtnHide = false;
@@ -9549,14 +9420,14 @@
       bubbleOn = !!v;
       bubbleToggle.checked = bubbleOn;
       saveConfig();
-      if (!bubbleOn) hideCostBubble();
+      if (!bubbleOn) hideBubble();
     }
     function setTurnCostOn(v) {
       turnCostOn = !!v;
       turnCostToggle.checked = turnCostOn;
       turnCostCloseInput.disabled = !turnCostOn;
       saveConfig();
-      if (!turnCostOn) hideCostBubble();
+      if (!turnCostOn && bubbleQueue.current() && bubbleQueue.current().kind === 'cost') bubbleQueue.dismiss();
     }
     function setTurnCostClose(v) {
       if (!turnCostOn) return;

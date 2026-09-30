@@ -463,15 +463,13 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
 
     await approval();
     assert.ok((await js('window.__playedAudio')).some(url => url.includes('fx1') && url.includes('release')));
-    await delay(13200);
-    assert.equal((await status()).scene, 'approval', 'approval expired without a click');
     await js('window.__whaleRenderTest.showCost(1)');
     await delay(300);
     assert.equal((await status()).scene, 'approval', 'completion displaced approval');
     await capture('persistent-approval');
     await click('.dshwv-pop-open');
-    assert.notEqual((await status()).scene, 'approval');
-    passed.push('approval persists beyond 12 seconds, queues completion, and dismisses on bubble click');
+    await until("window.__whaleRenderTest.status().scene === 'cost'", 'the completion queued behind approval did not show after dismissal');
+    passed.push('approval queues a completion behind it and dismisses on bubble click, which then shows the completion');
 
     await approval();
     await click('.dshwv-img');

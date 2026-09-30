@@ -12,6 +12,16 @@ _Avoid_: 数据源（那是 API 余额的配置项）、provider
 Codex 一轮任务或 Claude 一次回复结束的记录。每条只提示一次，同时算作对应用量来源的活动。
 _Avoid_: last turn、回合
 
+## 气泡
+
+**点击气泡 (Click bubble)**:
+点击角色时按用户配置的顺序依次显示的气泡。
+_Avoid_: round、普通气泡
+
+**系统气泡 (System bubble)**:
+挂件自己弹出的气泡：完成事件、用量警告、审批提醒。一次一个，打断点击气泡，其余按优先级排队；审批提醒保留到点击。与会话里的“提醒”不同。
+_Avoid_: whaleSys、通知
+
 ## 会话
 
 **会话 (Conversation)**:
