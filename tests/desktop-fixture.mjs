@@ -202,6 +202,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     assert.equal(await js("document.getElementById('chat-composer').getBoundingClientRect().top >= document.querySelector('.dshwv-img').getBoundingClientRect().bottom"), true, 'composer should be below pet');
     await js("document.getElementById('chat-open-settings').click()");
     await until("document.getElementById('chat-settings').open", 'chat settings did not open');
+    assert.equal(await js("document.getElementById('chat-settings-form').elements.namedItem('backgroundMaxTokens').value"), '1024', 'proactive reply length should show its default');
     await js(`(() => { const form = document.getElementById('chat-settings-form'); const values = { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: 'synthetic-chat-key', persona: 'You are a whale.', maxTokens: 1024 }; for (const [key, value] of Object.entries(values)) form.elements.namedItem(key).value = value; form.requestSubmit(); })()`);
     await until("!document.getElementById('chat-settings').open", 'chat settings did not save');
     await click('#chat-input');

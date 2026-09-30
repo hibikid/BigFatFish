@@ -28,6 +28,7 @@
         <div class="field-grid"><label>开始时间<input name="proactiveStart" type="time" required></label><label>结束时间<input name="proactiveEnd" type="time" required></label></div>
         <div class="field-grid"><label>最短间隔（分钟）<input name="proactiveMin" type="number" min="15" max="240" required></label><label>最长间隔（分钟）<input name="proactiveMax" type="number" min="15" max="360" required></label></div>
         <label>每天最多主动聊天次数<input name="proactiveLimit" type="number" min="1" max="12" required></label>
+        <label>主动消息最长回复（输出 token）<input name="backgroundMaxTokens" type="number" min="1" max="32768" step="1" required><small>用于主动闲聊和番茄钟提醒。思考模型的思考过程也计入，设得太小回复会被截断。</small></label>
       </fieldset>
       <div class="dialog-actions"><button id="chat-settings-cancel" type="button" class="quiet">取消</button><button id="chat-settings-save" type="submit" class="primary">保存设置</button></div>
     </form>

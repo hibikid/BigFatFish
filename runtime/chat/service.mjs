@@ -9,7 +9,9 @@ import { ChatActivity } from './activity.mjs';
 import { POMODORO_TOOLS, POMODORO_POLICY } from './pomodoro.mjs';
 import { generateReply } from './reply.mjs';
 
-const DEFAULTS = { baseUrl: '', model: 'deepseek-flash', persona: '', maxTokens: 1024 };
+const DEFAULTS = { baseUrl: '', model: 'deepseek-flash', persona: '', maxTokens: 1024, backgroundMaxTokens: 1024 };
+// A runaway guard only; the token settings decide how long a reply may be.
+const MAX_REPLY_CHARS = 128000;
 const KEY_REF = 'whale_chat_api_key_v1';
 const NEXT_KEY_REF = KEY_REF + '_next';
 const json = (status, value) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8' }, body: Buffer.from(JSON.stringify(value)) });
@@ -37,17 +39,19 @@ export class ChatService {
     this.billing.recoverHistory(this.conversations.allTurns(), { baseUrl: this.settings.baseUrl, key, settingsSavedAt: this.settingsSavedAt });
   }
   publicConfig() {
-    const { baseUrl, model, persona, maxTokens } = this.settings;
-    return { baseUrl, model, persona, maxTokens, hasKey: !!this.key(), keyStorage: this.memoryKey ? 'session' : this.vault?.available?.() ? 'encrypted' : 'session' };
+    const { baseUrl, model, persona, maxTokens, backgroundMaxTokens } = this.settings;
+    return { baseUrl, model, persona, maxTokens, backgroundMaxTokens, hasKey: !!this.key(), keyStorage: this.memoryKey ? 'session' : this.vault?.available?.() ? 'encrypted' : 'session' };
   }
   save(input) {
     if (this.active) throw new Error('请先停止当前回复，再修改会话设置');
     const baseUrl = String(input.baseUrl || '').trim(), model = String(input.model || '').trim();
     completionUrl(baseUrl);
     const persona = String(input.persona || '').trim(), maxTokens = Number(input.maxTokens);
+    const backgroundMaxTokens = input.backgroundMaxTokens === undefined ? this.settings.backgroundMaxTokens : Number(input.backgroundMaxTokens);
     if (!model || model.length > 200 || /[\x00-\x1f]/.test(model)) throw new Error('请填写有效的模型名称');
     if (persona.length > 16000) throw new Error('角色人设最多 16000 个字符');
     if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 32768) throw new Error('最长回复长度须为 1 到 32768 个 token');
+    if (!Number.isInteger(backgroundMaxTokens) || backgroundMaxTokens < 1 || backgroundMaxTokens > 32768) throw new Error('主动消息最长回复须为 1 到 32768 个 token');
     const newKey = String(input.apiKey || '').trim().replace(/^Bearer\s+/i, '');
     if (newKey.length > 16384 || /[\x00-\x20]/.test(newKey)) throw new Error('API key 格式无效');
     if (this.settings.baseUrl && new URL(baseUrl).origin !== new URL(this.settings.baseUrl).origin && !newKey) throw new Error('更换会话网站时请重新输入该网站的 API key');
@@ -61,7 +65,7 @@ export class ChatService {
       keyRef = encrypted ? keyRef === KEY_REF ? NEXT_KEY_REF : KEY_REF : '';
       if (encrypted) this.vault.write(keyRef, newKey);
     }
-    const settings = { baseUrl, model, persona, maxTokens, keyRef };
+    const settings = { baseUrl, model, persona, maxTokens, backgroundMaxTokens, keyRef };
     writeJson(this.configFile, settings); this.settings = settings;
     this.settingsSavedAt = savedAt(this.configFile);
     if (newKey) this.memoryKey = encrypted ? '' : newKey;
@@ -79,7 +83,7 @@ export class ChatService {
   // commits only if the reply still applies once generation has finished.
   async backgroundReply(prompt, kind, conversationId, includeHistory = true) {
     if (this.active || this.background || !this.key() || !this.settings.baseUrl) return null;
-    const key = this.key(), settings = { ...this.settings, maxTokens: Math.min(160, this.settings.maxTokens) };
+    const key = this.key(), settings = { ...this.settings, maxTokens: this.settings.backgroundMaxTokens };
     const controller = new AbortController(), id = randomUUID(), createdAt = new Date().toISOString();
     const background = { controller };
     background.done = new Promise(resolve => { background.resolve = resolve; });
@@ -88,7 +92,7 @@ export class ChatService {
       const history = !includeHistory ? [] : kind === 'proactive' ? this.conversations.allTurns().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(-12) :
         this.conversations.items.find(item => item.id === conversationId)?.turns || [];
       const reply = await this.reply(settings, key, { instruction: BACKGROUND_INSTRUCTION, history, prompt, id, signal: controller.signal,
-        timeoutMs: Math.min(kind === 'pomodoro' ? 8000 : 30000, this.timeoutMs), maxChars: 2000 });
+        timeoutMs: Math.min(kind === 'pomodoro' ? 8000 : 30000, this.timeoutMs), maxChars: MAX_REPLY_CHARS });
       const text = reply.text.trim();
       if (reply.status !== 'completed' || !text) return null;
       return { text, commit: () => {
@@ -160,7 +164,7 @@ export class ChatService {
         this.active.job = (async () => {
           try {
             const reply = await this.reply(settings, key, { history, prompt: text, tools, id, signal: controller.signal,
-              timeoutMs: this.timeoutMs, idleMs: this.idleMs, maxChars: 128000, onDelta: delta => { turn.text += delta; emit({ type: 'delta', text: delta }); } });
+              timeoutMs: this.timeoutMs, idleMs: this.idleMs, maxChars: MAX_REPLY_CHARS, onDelta: delta => { turn.text += delta; emit({ type: 'delta', text: delta }); } });
             Object.assign(turn, { text: reply.text, status: reply.status, requests: reply.requests },
               reply.usage ? { usage: reply.usage } : {}, reply.finishReason ? { finishReason: reply.finishReason } : {}, reply.error ? { error: reply.error } : {});
           } catch { turn.status = 'failed'; turn.error = '会话连接失败，请检查网络或接口地址'; }

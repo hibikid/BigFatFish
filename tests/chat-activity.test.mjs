@@ -231,6 +231,24 @@ test('chat and automatic replies receive fresh local time without persisting it 
   assert.equal(requests[3].tools, undefined);
 });
 
+test('proactive chat and Pomodoro reminders use their own reply length, not the foreground one', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-background-length-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const requests = [], long = '长'.repeat(2500);
+  const service = new ChatService({ dataDir, activityOptions: { startTimer: false }, fetchImpl: async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return sse([{ choices: [{ index: 0, delta: { content: long } }] }, { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage }]);
+  } });
+  t.after(() => service.close());
+  service.save({ baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: 'synthetic-key', persona: '你是大肥鱼', maxTokens: 256, backgroundMaxTokens: 4000 });
+  await consume(service.start({ id: 'foreground_chat', text: '你好' }));
+  const proactive = await service.proactive();
+  const reminder = await service.reminder({ phase: 'await_break', cycle: 1, cycles: 2, focusMinutes: 25, breakMinutes: 5 });
+  assert.deepEqual(requests.map(request => request.max_tokens), [256, 4000, 4000]);
+  assert.equal(proactive?.text, long, 'a long reply within the token setting is kept whole');
+  assert.equal(reminder?.text, long);
+});
+
 test('a background reply that became stale while generating is neither shown nor kept in conversation history, but is still billed', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-stale-reply-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));

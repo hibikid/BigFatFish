@@ -41,6 +41,11 @@ test('chat settings keep secrets out of settings/history and require a new key w
   assert.equal(restarted.publicConfig().hasKey, true);
   assert.throws(() => service.save({ ...settings, baseUrl: 'https://other.example.test', apiKey: '' }), /重新输入/);
   assert.throws(() => service.save({ ...settings, maxTokens: 0 }), /最长回复长度/);
+  assert.equal(saved.backgroundMaxTokens, 1024, 'settings saved before the option existed get the default');
+  assert.throws(() => service.save({ ...settings, backgroundMaxTokens: 32769 }), /主动消息最长回复/);
+  assert.equal(service.save({ ...settings, apiKey: '', backgroundMaxTokens: '600' }).backgroundMaxTokens, 600);
+  assert.equal(service.save({ ...settings, apiKey: '' }).backgroundMaxTokens, 600, 'a save without the option keeps it');
+  assert.equal(new ChatService({ dataDir, secretVault: vault }).publicConfig().backgroundMaxTokens, 600);
   assert.throws(() => completionUrl('https://user:secret@chat.example.test/v1'), /不能包含/);
   assert.throws(() => completionUrl('http://remote.example.test'), /HTTPS/);
   assert.equal(completionUrl('https://chat.example.test/v1/chat/completions'), 'https://chat.example.test/v1/chat/completions');

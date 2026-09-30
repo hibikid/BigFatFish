@@ -101,7 +101,7 @@ async function openSettings() {
   busySettings = true;
   try {
     const [result, activity] = await Promise.all([client.settings(), client.activitySettings()]); settings = result.settings;
-    for (const name of ['baseUrl', 'model', 'persona', 'maxTokens']) field(name).value = settings[name];
+    for (const name of ['baseUrl', 'model', 'persona', 'maxTokens', 'backgroundMaxTokens']) field(name).value = settings[name];
     field('apiKey').value = '';
     field('apiKey').placeholder = settings.hasKey ? '已保存，留空保留' : '';
     field('proactiveEnabled').checked = activity.settings.enabled;
