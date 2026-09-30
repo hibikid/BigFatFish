@@ -4,23 +4,7 @@ import { ConfigStore } from './config.mjs';
 import { BalanceProvider } from './providers.mjs';
 import { UsageLedger, usageDefaults } from './ledger.mjs';
 import { readJson, writeJson, rounded } from './paths.mjs';
-import { TurnJournal, safeSample, safeTurn, safeUsage } from './turn-journal.mjs';
-
-function subscriptionWindow(value, expectedMinutes) {
-  if (['usedPercent', 'windowMinutes', 'resetsAt'].some(key => typeof value?.[key] !== 'number')) return null;
-  const usedPercent = Number(value?.usedPercent), windowMinutes = Number(value?.windowMinutes), resetsAt = Number(value?.resetsAt);
-  if (!Number.isFinite(usedPercent) || windowMinutes !== expectedMinutes || !Number.isFinite(resetsAt)) return null;
-  return { usedPercent: Math.max(0, Math.min(100, usedPercent)), windowMinutes, resetsAt };
-}
-
-function safeSubscriptionRateLimits(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const fiveHour = subscriptionWindow(value.fiveHour, 300), sevenDay = subscriptionWindow(value.sevenDay, 10080);
-  const observedAt = Number(value.observedAt);
-  if (!fiveHour || !sevenDay || !Number.isFinite(observedAt)) return null;
-  return { source: 'codex-session-rate-limits', observedAt,
-    planType: typeof value.planType === 'string' ? value.planType.slice(0, 64) : '', fiveHour, sevenDay };
-}
+import { TurnJournal, safeSample, safeSubscriptionRateLimits, safeTurn, safeUsage } from './turn-journal.mjs';
 
 function publicQuota(window) {
   return { usedPercent: window.usedPercent, remainingPercent: Math.max(0, Math.min(100, 100 - window.usedPercent)),

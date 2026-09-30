@@ -11,7 +11,9 @@ function safeRateWindow(value, expectedMinutes) {
   return { usedPercent: Math.max(0, Math.min(100, usedPercent)), windowMinutes: expectedMinutes, resetsAt };
 }
 
-function safeSubscriptionRateLimits(value) {
+// A Codex subscription quota snapshot as the runtime stores it: both rolling
+// windows are required, and no account data is kept.
+export function safeSubscriptionRateLimits(value) {
   const observedAt = finite(value?.observedAt), fiveHour = safeRateWindow(value?.fiveHour, 300), sevenDay = safeRateWindow(value?.sevenDay, 10080);
   if (observedAt === null || !fiveHour || !sevenDay) return null;
   return { source: 'codex-session-rate-limits', observedAt, planType: text(value.planType).slice(0, 64), fiveHour, sevenDay };
