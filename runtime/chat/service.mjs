@@ -5,7 +5,8 @@ import { readJson, writeJson } from '../paths.mjs';
 import { completionUrl } from './provider.mjs';
 import { ChatBilling } from './billing.mjs';
 import { Conversations } from './conversations.mjs';
-import { ChatActivity, POMODORO_TOOLS, POMODORO_POLICY } from './activity.mjs';
+import { ChatActivity } from './activity.mjs';
+import { POMODORO_TOOLS, POMODORO_POLICY } from './pomodoro.mjs';
 import { generateReply } from './reply.mjs';
 
 const DEFAULTS = { baseUrl: '', model: 'deepseek-flash', persona: '', maxTokens: 1024 };

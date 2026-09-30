@@ -9,7 +9,7 @@ const display = createCompanionDisplay({ pet: document.querySelector('.dshwv-img
 const billing = createChatBilling({ client, root: $('chat-billing') });
 let turns = [], active = null, loaded = false, loadJob = null, settings = null, busySettings = false, recoveryTimer = null;
 let conversations = [], conversationId = null, busyConversations = false, deletingId = null;
-let currentNotice = null, pomodoro = { phase: 'idle' }, activityPolling = false, advancing = false;
+let currentNotice = null, pomodoro = { phase: 'idle' }, pomodoroAt = 0, activityPolling = false, advancing = false;
 const drafts = new Map();
 const errorText = error => error?.message || '会话操作失败';
 const field = name => form.elements.namedItem(name);
@@ -217,11 +217,14 @@ input.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); }
   if (event.key === 'Escape') { event.preventDefault(); display.close(); }
 });
+// The runtime reports the remaining time; this clock only measures time since that report.
+function showPomodoro(state) { pomodoro = state; pomodoroAt = Date.now(); renderPomodoro(); }
 function renderPomodoro() {
   const badge = $('chat-timer'), state = pomodoro;
   const labels = { focus: '专注', break: '休息', await_break: '待休息', await_focus: '待专注', paused: '已暂停' };
   if (!labels[state.phase]) { badge.hidden = true; return; }
-  const seconds = state.dueAt ? Math.max(0, Math.ceil((state.dueAt - Date.now()) / 1000)) : state.remainingSeconds;
+  const elapsed = ['focus', 'break'].includes(state.phase) ? Math.floor((Date.now() - pomodoroAt) / 1000) : 0;
+  const seconds = Number.isFinite(state.remainingSeconds) ? Math.max(0, state.remainingSeconds - elapsed) : undefined;
   const clock = Number.isFinite(seconds) ? ' ' + String(Math.floor(seconds / 60)).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0') : '';
   badge.textContent = labels[state.phase] + ' ' + state.cycle + '/' + state.cycles + clock;
   badge.hidden = false; display.layout();
@@ -231,7 +234,7 @@ async function pollActivity() {
   activityPolling = true;
   try {
     await client.presence(!composer.hidden || !!document.querySelector('.dshwv-pop-open'));
-    const result = await client.activity(); pomodoro = result.pomodoro; renderPomodoro();
+    const result = await client.activity(); showPomodoro(result.pomodoro);
     if (document.hidden || active || advancing || !result.notices.length) return;
     const notice = result.notices.find(item => item.kind === 'pomodoro') || result.notices[0];
     if (currentNotice?.seq === notice.seq) return;
@@ -253,7 +256,7 @@ reply.addEventListener('click', async () => {
     try {
       if (notice.advance) {
         const result = await client.advancePomodoro(notice.advance);
-        pomodoro = result.pomodoro; renderPomodoro();
+        showPomodoro(result.pomodoro);
       }
       if (currentNotice === notice) { currentNotice = null; reply.title = ''; display.hideReply(); }
     } catch (error) { window.whaleToast(errorText(error)); }

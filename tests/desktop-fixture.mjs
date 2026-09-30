@@ -345,6 +345,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await capture('chat-pomodoro-break-reminder');
     await click('#chat-output');
     assert.equal(JSON.parse((await dispatcher.dispatch('/api/chat/activity')).body).pomodoro.phase, 'break');
+    await until("/休息 1\\/2 0[45]:\\d\\d/.test(document.getElementById('chat-timer').textContent)", 'break countdown must follow the runtime clock');
     assert.equal(await js("document.getElementById('chat-composer').hidden && document.getElementById('chat-reply').hidden"), true, 'click should advance without opening chat');
     assert.equal(JSON.parse((await dispatcher.dispatch('/api/chat/billing')).body).billing.recorded, beforeClick, 'phase click must not make a model request');
     clockOffset += 6 * 60000;

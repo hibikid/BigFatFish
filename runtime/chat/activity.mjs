@@ -1,18 +1,12 @@
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { readJson, writeJson } from '../paths.mjs';
+import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro } from './pomodoro.mjs';
 
 const DEFAULTS = { enabled: false, start: '09:00', end: '21:00', minMinutes: 45, maxMinutes: 90, dailyLimit: 3 };
+const FALLBACK = { completed: '这轮专注完成了，辛苦啦。', await_break: '专注时间到了，准备休息一下吧。', await_focus: '休息时间到了，准备开始下一轮专注吧。' };
 const minute = value => { const match = /^(\d\d):(\d\d)$/.exec(value); return match && +match[1] < 24 && +match[2] < 60 ? +match[1] * 60 + +match[2] : null; };
-const error = message => ({ ok: false, error: message });
-const own = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
-
-export const POMODORO_TOOLS = Object.freeze([
-  { type: 'function', function: { name: 'pomodoro_set', description: 'Set and immediately start one Pomodoro plan. Use only when the user asks to set or replace a timer. You may adapt the requested durations within reasonable bounds; tell the user the actual plan.', parameters: { type: 'object', properties: { focusMinutes: { type: 'integer', minimum: 1, maximum: 240 }, breakMinutes: { type: 'integer', minimum: 1, maximum: 120 }, cycles: { type: 'integer', minimum: 1, maximum: 12 } }, required: ['focusMinutes', 'breakMinutes', 'cycles'], additionalProperties: false } } },
-  { type: 'function', function: { name: 'pomodoro_control', description: 'Control the current Pomodoro. Use only when the user asks or answers a phase reminder.', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['pause', 'resume', 'start_break', 'start_focus', 'extend_focus', 'stop'] }, minutes: { type: 'integer', minimum: 1, maximum: 60 } }, required: ['action'], additionalProperties: false } } },
-  { type: 'function', function: { name: 'pomodoro_status', description: 'Read the current Pomodoro state when needed to answer the user.', parameters: { type: 'object', properties: {}, additionalProperties: false } } },
-]);
-export const POMODORO_POLICY = '番茄钟工具已经预授权，会在本地立即执行。仅用于用户请求设置或控制计时、回应计时提醒；日常闲聊不要调用。可偶尔按情况建议合理的专注与休息时长，或询问缺失的信息。深夜请求开始番茄钟时，可以依人设先劝休息、建议缩短，或询问用户是否仍想继续；选择先询问时不要调用设置工具，用户明确坚持后可以执行。调用成功后说明实际安排；调用失败不要宣称已执行。';
+// An unreadable file is treated as missing; the next save replaces it.
+const readOrDefault = (file, fallback) => { try { return readJson(file, fallback); } catch { return structuredClone(fallback); } };
 
 // Keeps a generated reply that still applies: commits it to history when the
 // generator supports that, and yields null if there is no text or the commit fails.
@@ -28,9 +22,9 @@ export class ChatActivity {
     this.configFile = path.join(dataDir, 'chat-activity.json');
     this.stateFile = path.join(dataDir, 'chat-activity-state.json');
     this.now = now; this.random = random; this.onProactive = onProactive; this.onReminder = onReminder; this.onNotice = onNotice; this.canProactive = canProactive;
-    this.config = { ...DEFAULTS, ...readJson(this.configFile, {}) };
-    const stored = readJson(this.stateFile, {});
-    this.pomodoro = stored.pomodoro || { phase: 'idle' };
+    this.config = { ...DEFAULTS, ...readOrDefault(this.configFile, {}) };
+    const stored = readOrDefault(this.stateFile, {});
+    this.pomodoro = stored.pomodoro || IDLE;
     this.notices = Array.isArray(stored.notices) ? stored.notices.slice(-20) : [];
     this.sequence = Number.isSafeInteger(stored.sequence) ? stored.sequence : 0;
     this.acked = Number.isSafeInteger(stored.acked) ? stored.acked : 0;
@@ -64,10 +58,7 @@ export class ChatActivity {
   userActivity() { this.lastUserAt = this.now(); this.nextAt = Math.max(this.nextAt, this.lastUserAt + 20 * 60000); this.persist(); }
   setPresence(input) { this.presence = { busy: input.busy === true, at: this.now() }; }
   snapshot() {
-    const state = { ...this.pomodoro };
-    if (['focus', 'break'].includes(state.phase)) state.remainingSeconds = Math.max(0, Math.ceil((state.dueAt - this.now()) / 1000));
-    if (state.phase === 'paused') state.remainingSeconds = Math.max(0, Math.ceil(state.remainingMs / 1000));
-    return { settings: this.settings(), pomodoro: state, notices: this.notices.filter(item => item.seq > this.acked) };
+    return { settings: this.settings(), pomodoro: viewPomodoro(this.pomodoro, this.now()), notices: this.notices.filter(item => item.seq > this.acked) };
   }
   ack(seq) { if (Number.isSafeInteger(seq) && seq > this.acked && seq <= this.sequence) { this.acked = seq; this.notices = this.notices.filter(item => item.seq > seq); this.persist(); } }
   notice(kind, text, conversationId, advance = null) {
@@ -79,40 +70,23 @@ export class ChatActivity {
     try { this.onNotice(item); } catch {}
     return item;
   }
+  // Replaces the plan only once it is saved, so a failed save keeps the previous plan.
+  commit(state) {
+    const previous = this.pomodoro;
+    this.pomodoro = state;
+    try { this.persist(); }
+    catch (failure) { this.pomodoro = previous; throw failure; }
+  }
+  // A reminder click stays valid after the notice is acknowledged, but only for its own transition.
   advance(input) {
-    const current = this.pomodoro;
-    // The reminder remains actionable after display acknowledgement, but only for its original transition.
-    if (!own(input, ['planId', 'reminderId', 'phase', 'cycle']) || !input.reminderId ||
-      !['await_break', 'await_focus'].includes(current.phase) ||
-      ['planId', 'reminderId', 'phase', 'cycle'].some(key => input[key] !== current[key])) {
-      return { ok: true, advanced: false, pomodoro: this.snapshot().pomodoro };
-    }
-    const result = this.tool({ name: 'pomodoro_control', arguments: JSON.stringify({ action: current.phase === 'await_break' ? 'start_break' : 'start_focus' }) }, current.conversationId);
-    return { ...result, advanced: result.ok };
+    const next = advancePomodoro(this.pomodoro, input, this.now());
+    if (next) this.commit(next);
+    return { ok: true, advanced: !!next, pomodoro: this.snapshot().pomodoro };
   }
   tool(call, conversationId) {
-    if (!call || typeof call !== 'object' || !POMODORO_TOOLS.some(tool => tool.function.name === call.name) || typeof call.arguments !== 'string' || call.arguments.length > 4096) return error('此操作不在预授权范围内');
-    let args;
-    try { args = JSON.parse(call.arguments); } catch { return error('操作参数格式无效'); }
-    const now = this.now(), current = this.pomodoro;
-    if (call.name === 'pomodoro_status') return own(args, []) ? { ok: true, pomodoro: this.snapshot().pomodoro } : error('操作参数格式无效');
-    if (call.name === 'pomodoro_set') {
-      if (!own(args, ['focusMinutes', 'breakMinutes', 'cycles']) || !Number.isInteger(args.focusMinutes) || args.focusMinutes < 1 || args.focusMinutes > 240 ||
-        !Number.isInteger(args.breakMinutes) || args.breakMinutes < 1 || args.breakMinutes > 120 || !Number.isInteger(args.cycles) || args.cycles < 1 || args.cycles > 12 ||
-        args.focusMinutes * args.cycles + args.breakMinutes * (args.cycles - 1) > 24 * 60) return error('番茄钟数值超出预授权范围');
-      this.pomodoro = { phase: 'focus', planId: randomUUID(), focusMinutes: args.focusMinutes, breakMinutes: args.breakMinutes, cycles: args.cycles, cycle: 1, dueAt: now + args.focusMinutes * 60000, conversationId };
-    } else {
-      if (!own(args, ['action', 'minutes']) || !['pause', 'resume', 'start_break', 'start_focus', 'extend_focus', 'stop'].includes(args.action)) return error('此操作不在预授权范围内');
-      if (args.action === 'pause' && ['focus', 'break'].includes(current.phase)) this.pomodoro = { ...current, phase: 'paused', pausedFrom: current.phase, remainingMs: Math.max(0, current.dueAt - now), dueAt: null };
-      else if (args.action === 'resume' && current.phase === 'paused') this.pomodoro = { ...current, phase: current.pausedFrom, dueAt: now + current.remainingMs, pausedFrom: null, remainingMs: null };
-      else if (args.action === 'start_break' && ['focus', 'await_break'].includes(current.phase) && current.cycle < current.cycles) this.pomodoro = { ...current, phase: 'break', dueAt: now + current.breakMinutes * 60000 };
-      else if (args.action === 'start_focus' && ['break', 'await_focus'].includes(current.phase) && current.cycle < current.cycles) this.pomodoro = { ...current, phase: 'focus', cycle: current.cycle + 1, dueAt: now + current.focusMinutes * 60000 };
-      else if (args.action === 'extend_focus' && ['focus', 'await_break'].includes(current.phase) && Number.isInteger(args.minutes) && args.minutes >= 1 && args.minutes <= 60) this.pomodoro = { ...current, phase: 'focus', dueAt: Math.max(now, current.dueAt || now) + args.minutes * 60000 };
-      else if (args.action === 'stop' && !['idle', 'completed'].includes(current.phase)) this.pomodoro = { phase: 'idle' };
-      else return error('当前阶段不能执行此操作');
-    }
-    try { this.persist(); }
-    catch (failure) { this.pomodoro = current; throw failure; }
+    const result = applyPomodoroCall(this.pomodoro, call, { now: this.now(), conversationId });
+    if (!result.ok) return result;
+    if (result.state !== this.pomodoro) this.commit(result.state);
     return { ok: true, pomodoro: this.snapshot().pomodoro };
   }
   async tick() {
@@ -120,20 +94,15 @@ export class ChatActivity {
     this.busy = true;
     const jobs = [];
     try {
-      const now = this.now(), timer = this.pomodoro;
-      if (['focus', 'break'].includes(timer.phase) && now >= timer.dueAt) {
-        const next = timer.phase === 'focus' ? timer.cycle === timer.cycles ? 'completed' : 'await_break' : 'await_focus';
-        this.pomodoro = { ...timer, phase: next, dueAt: null, reminderId: randomUUID() };
-        try { this.persist(); }
-        catch { this.pomodoro = timer; return; }
-        const reminderId = this.pomodoro.reminderId;
-        const fallback = next === 'completed' ? '这轮专注完成了，辛苦啦。' : next === 'await_break' ? '专注时间到了，准备休息一下吧。' : '休息时间到了，准备开始下一轮专注吧。';
+      const now = this.now(), expired = expirePomodoro(this.pomodoro, now);
+      if (expired) {
+        try { this.commit(expired.state); } catch { return; }
+        const { state, reminder } = expired, fallback = FALLBACK[reminder.phase];
         jobs.push((async () => {
-          const generated = await this.onReminder({ ...this.pomodoro, fallback }).catch(() => null);
-          if (this.closed || this.pomodoro.planId !== timer.planId || this.pomodoro.phase !== next || this.pomodoro.cycle !== timer.cycle || this.pomodoro.reminderId !== reminderId) return;
-          const advance = next === 'completed' ? null : { planId: timer.planId, reminderId, phase: next, cycle: timer.cycle };
+          const generated = await this.onReminder({ ...state, fallback }).catch(() => null);
+          if (this.closed || !reminderApplies(this.pomodoro, reminder)) return;
           const reply = settle(generated);
-          this.notice('pomodoro', reply?.text || fallback, reply?.conversationId || timer.conversationId, advance);
+          this.notice('pomodoro', reply?.text || fallback, reply?.conversationId || state.conversationId, reminder.phase === 'completed' ? null : reminder);
         })());
       }
       if (now - this.lastProactiveCheck >= 30000) {
