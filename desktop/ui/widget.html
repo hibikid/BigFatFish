@@ -12,6 +12,7 @@
     <textarea id="chat-input" aria-label="消息" rows="2" maxlength="16000"></textarea>
     <footer class="chat-footer"><div class="chat-footer-info"><div id="chat-billing" class="chat-billing" aria-label="会话消费与余额"><span data-chat-spent>本地30天 --</span><span data-chat-balance>余额 --</span><button type="button" class="chat-billing-refresh" aria-label="刷新会话消费与余额" title="刷新会话消费与余额">↻</button></div><span id="chat-status" role="status"></span></div><button id="chat-stop" type="button" hidden>停止</button><button id="chat-send" type="button">发送</button></footer>
   </section>
+  <div id="chat-timer" class="chat-timer" role="status" hidden></div>
   <section id="chat-reply" class="chat-reply" aria-label="角色回复" hidden><button id="chat-reply-close" type="button" class="icon-button" aria-label="收起回复" title="收起回复">×</button><div id="chat-output" class="chat-output" role="log" aria-live="off" aria-busy="false"></div></section>
   <dialog id="chat-settings" aria-labelledby="chat-settings-title">
     <form id="chat-settings-form">
@@ -22,6 +23,12 @@
       <div id="chat-key-state"></div>
       <label>角色人设<textarea name="persona" maxlength="16000" rows="5"></textarea></label>
       <label>最长回复长度（输出 token）<input name="maxTokens" type="number" min="1" max="32768" step="1" required></label>
+      <fieldset class="chat-activity-settings"><legend>主动闲聊</legend>
+        <label class="check"><input name="proactiveEnabled" type="checkbox"> 在指定时间内偶尔主动聊天</label>
+        <div class="field-grid"><label>开始时间<input name="proactiveStart" type="time" required></label><label>结束时间<input name="proactiveEnd" type="time" required></label></div>
+        <div class="field-grid"><label>最短间隔（分钟）<input name="proactiveMin" type="number" min="15" max="240" required></label><label>最长间隔（分钟）<input name="proactiveMax" type="number" min="15" max="360" required></label></div>
+        <label>每天最多主动聊天次数<input name="proactiveLimit" type="number" min="1" max="12" required></label>
+      </fieldset>
       <div class="dialog-actions"><button id="chat-settings-cancel" type="button" class="quiet">取消</button><button id="chat-settings-save" type="submit" class="primary">保存设置</button></div>
     </form>
   </dialog>

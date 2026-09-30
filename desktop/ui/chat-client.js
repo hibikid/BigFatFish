@@ -19,6 +19,12 @@ export function createChatClient(fetchImpl = window.fetch.bind(window)) {
     selectConversation: async id => (await request('conversations', 'PUT', { id })).json(),
     deleteConversation: async id => (await request('conversations', 'DELETE', { id })).json(),
     billing: async force => (await request('billing' + (force ? '?refresh=1' : ''))).json(),
+    activity: async () => (await request('activity')).json(),
+    activitySettings: async () => (await request('activity/settings')).json(),
+    saveActivitySettings: async settings => (await request('activity/settings', 'PUT', settings)).json(),
+    ackActivity: async seq => (await request('activity/ack', 'POST', { seq })).json(),
+    advancePomodoro: async reminder => (await request('activity/advance', 'POST', reminder)).json(),
+    presence: async busy => (await request('activity/presence', 'POST', { busy })).json(),
     clear: async () => (await request('history', 'DELETE')).json(),
     stop: async id => (await request('stop', 'POST', { id })).json(),
     send: async (id, text, onEvent, conversationId) => {

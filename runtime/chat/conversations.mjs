@@ -3,10 +3,10 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJson } from '../paths.mjs';
 
-const createConversation = (turns = []) => {
+const createConversation = (turns = [], kind = 'normal') => {
   const now = new Date().toISOString();
   return { id: randomUUID(), createdAt: turns[0]?.createdAt || now,
-    updatedAt: turns.at(-1)?.createdAt || now, turns };
+    updatedAt: turns.at(-1)?.createdAt || now, kind, turns };
 };
 
 export class Conversations {
@@ -35,7 +35,7 @@ export class Conversations {
   get current() { return this.items.find(item => item.id === this.currentId); }
   allTurns() { return this.items.flatMap(item => item.turns); }
   list() {
-    return this.items.map(item => ({ id: item.id, title: [...String(item.turns[0]?.user || '新会话').replace(/\s+/g, ' ')].slice(0, 48).join(''),
+    return this.items.map(item => ({ id: item.id, kind: item.kind || 'normal', title: item.kind === 'spontaneous' ? '随便聊聊' : [...String(item.turns[0]?.user || '新会话').replace(/\s+/g, ' ')].slice(0, 48).join(''),
       createdAt: item.createdAt, updatedAt: item.updatedAt, messages: item.turns.length }))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
@@ -44,9 +44,25 @@ export class Conversations {
     this.items = items; this.currentId = currentId;
   }
   persist() {
-    const turns = [...this.current.turns];
+    this.saveTurns(this.currentId, this.current.turns);
+  }
+  saveTurns(id, source) {
+    const turns = [...source];
     while (turns.length > 60 || JSON.stringify(turns).length > 512 * 1024 && turns.length > 1) turns.shift();
-    this.commit(this.items.map(item => item.id === this.currentId ? { ...item, turns, updatedAt: new Date().toISOString() } : item), this.currentId);
+    this.commit(this.items.map(item => item.id === id ? { ...item, turns, updatedAt: new Date().toISOString() } : item), this.currentId);
+  }
+  spontaneous() {
+    let item = this.items.find(item => item.kind === 'spontaneous');
+    if (!item) {
+      item = createConversation([], 'spontaneous');
+      this.commit([...this.items, item], this.currentId);
+    }
+    return item;
+  }
+  appendTo(id, turn) {
+    const item = this.items.find(row => row.id === id);
+    if (!item) throw new Error('会话不存在');
+    this.saveTurns(id, [...item.turns, turn]);
   }
   create() {
     const item = createConversation(); this.commit([...this.items, item], item.id);

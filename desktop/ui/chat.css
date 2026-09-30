@@ -35,3 +35,7 @@
 .chat-reply.companion-covered{visibility:hidden;pointer-events:none}
 #chat-settings textarea{width:100%;min-height:120px;resize:vertical;margin-top:6px;border:1px solid #d9e4e1;border-radius:8px;padding:10px 11px;font:inherit;font-size:12px;color:#244950;line-height:1.6}
 #chat-settings textarea:focus{outline:2px solid #b3d3cf}#chat-key-state{font-size:11px;color:#7b8f93;margin-top:6px}
+.chat-activity-settings{border:0;border-top:1px solid #d9e4e1;margin:20px 0 0;padding:14px 0 0;min-width:0}
+.chat-activity-settings legend{font-size:13px;font-weight:600;color:#294c54;padding:0 8px 0 0}
+.chat-activity-settings .check{margin-top:4px}
+.chat-timer{position:fixed;z-index:10099;max-width:min(220px,calc(100vw - 16px));padding:4px 8px;border:1px solid #80aaa2;border-radius:6px;background:#f5fffd;color:#205b56;font-size:11px;font-weight:600;line-height:1.4;text-align:center;pointer-events:none;white-space:nowrap}

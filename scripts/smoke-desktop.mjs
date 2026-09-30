@@ -7,7 +7,8 @@ import { DATA_HOME, ROOT } from '../runtime/paths.mjs';
 const binary = process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : process.platform === 'win32' ? 'electron.exe' : 'electron';
 const electron = process.env.WHALE_ELECTRON_PATH || path.join(DATA_HOME, 'desktop-runtime', 'node_modules', 'electron', 'dist', binary);
 if (!fs.existsSync(electron)) throw new Error('Install the desktop component or set WHALE_ELECTRON_PATH to its executable.');
-const outputParent = path.resolve(process.argv[2] || path.join(ROOT, 'qa-output'));
+const inputOnly = process.argv.includes('--input-focus');
+const outputParent = path.resolve(process.argv.slice(2).find(arg => arg !== '--input-focus') || path.join(ROOT, 'qa-output'));
 fs.mkdirSync(outputParent, { recursive: true });
 const output = fs.mkdtempSync(path.join(outputParent, 'desktop-0.2.6-'));
 // Keep Unix socket paths short and isolate both Electron storage and Codex data.
@@ -34,9 +35,9 @@ async function run(phase) {
 }
 
 try {
-  await run('initial');
-  await run('restart');
-  process.stdout.write('Desktop smoke passed (initial + process restart): ' + output + '\n');
+  if (inputOnly) await run('input');
+  else { await run('initial'); await run('restart'); }
+  process.stdout.write('Desktop smoke passed (' + (inputOnly ? 'input focus' : 'initial + process restart') + '): ' + output + '\n');
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }

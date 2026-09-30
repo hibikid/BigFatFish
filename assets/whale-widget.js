@@ -64,6 +64,7 @@
     styleEl.textContent += '\n.dshwv-fxicon:hover{background:rgba(32,49,112,.20);color:#203170}';
     styleEl.textContent += '\n.dshwv-fxicon:focus-visible{outline:2px solid rgba(32,49,112,.55);outline-offset:1px}';
     styleEl.textContent += '\n.dshwv-fxinfo{position:fixed;z-index:27000;max-width:min(320px,calc(100vw - 16px));box-sizing:border-box;background:#fff;border:1px solid rgba(32,49,112,.35);border-radius:8px;box-shadow:0 6px 16px rgba(0,0,0,.16);padding:8px 10px;color:#203170;font-size:11px;line-height:1.5;text-align:left;white-space:pre-line;pointer-events:auto;color-scheme:light}';
+    styleEl.textContent += '\n.dshwv-source-switch{display:flex;flex:1;min-width:0;border:1px solid #badbdc;border-radius:6px;overflow:hidden}.dshwv-source-switch button{flex:1;min-width:0;border:0;background:#fff;color:#356a6c;padding:5px 8px;font-size:12px}.dshwv-source-switch button[aria-pressed="true"]{background:#146b70;color:#fff}.dshwv-source-switch button:focus-visible{outline:2px solid #146b70;outline-offset:-2px}';
     document.head.appendChild(styleEl);
     var root = document.createElement('div');
     root.className = 'dshwv-root';
@@ -220,6 +221,7 @@
     }
     var taskEndDrop = null;
     var approvalSoundDrop = null;
+    var pomodoroSoundDrop = null;
     var moduleImgDrop = null;
     function dshwCustSel(sel, opts) {
       if (!sel || !sel.parentNode || sel.__dshwCust) return {
@@ -391,6 +393,28 @@
       usageSet.approvalSound.sel = approvalSoundSel.value;
       saveUsageSettings({ approvalSound: usageSet.approvalSound });
     });
+    var pomodoroSoundToggle = document.createElement('input');
+    pomodoroSoundToggle.type = 'checkbox';
+    pomodoroSoundToggle.className = 'dshwv-check';
+    pomodoroSoundToggle.checked = true;
+    pomodoroSoundToggle.title = '番茄钟阶段结束时播放提示音';
+    pomodoroSoundToggle.addEventListener('change', function () {
+      usageSet = usageSet || {};
+      usageSet.pomodoroSound = usageSet.pomodoroSound || { on: true, sel: 'preset:fx1:release' };
+      usageSet.pomodoroSound.on = pomodoroSoundToggle.checked;
+      pomodoroSoundSel.disabled = !pomodoroSoundToggle.checked;
+      if (pomodoroSoundDrop) pomodoroSoundDrop.refresh();
+      saveUsageSettings({ pomodoroSound: usageSet.pomodoroSound });
+    });
+    var pomodoroSoundSel = document.createElement('select');
+    pomodoroSoundSel.className = 'dshwv-sound';
+    pomodoroSoundSel.title = '选择番茄钟提醒音：音效组或自定义音频片段';
+    pomodoroSoundSel.addEventListener('change', function () {
+      usageSet = usageSet || {};
+      usageSet.pomodoroSound = usageSet.pomodoroSound || { on: true, sel: 'preset:fx1:release' };
+      usageSet.pomodoroSound.sel = pomodoroSoundSel.value;
+      saveUsageSettings({ pomodoroSound: usageSet.pomodoroSound });
+    });
     function fillTaskEndOptions(pref) {
       var prefSel = usageSet && usageSet.taskEnd && usageSet.taskEnd.sel || pref && pref.sel || '';
       var cur = taskEndSel.value || prefSel || '';
@@ -472,23 +496,24 @@
       }
       if (taskEndDrop) taskEndDrop.refresh();
     }
-    function fillApprovalSoundOptions(pref) {
-      var selected = pref && pref.sel || approvalSoundSel.value || 'preset:fx1:release';
-      approvalSoundSel.replaceChildren();
-      for (var i = 0; i < taskEndSel.options.length; i++) approvalSoundSel.appendChild(taskEndSel.options[i].cloneNode(true));
+    function fillReminderSoundOptions(select, drop, key, pref) {
+      var selected = pref && pref.sel || select.value || 'preset:fx1:release';
+      select.replaceChildren();
+      for (var i = 0; i < taskEndSel.options.length; i++) select.appendChild(taskEndSel.options[i].cloneNode(true));
       var found = false;
-      for (var j = 0; j < approvalSoundSel.options.length; j++) if (approvalSoundSel.options[j].value === selected) {
+      for (var j = 0; j < select.options.length; j++) if (select.options[j].value === selected) {
         found = true;
         break;
       }
-      approvalSoundSel.value = found ? selected : 'preset:fx1:release';
-      if (!found && audioLoaded && usageSet && usageSet.approvalSound) usageSet.approvalSound.sel = approvalSoundSel.value;
-      if (approvalSoundDrop) approvalSoundDrop.refresh();
+      select.value = found ? selected : 'preset:fx1:release';
+      if (!found && audioLoaded && usageSet && usageSet[key]) usageSet[key].sel = select.value;
+      if (drop) drop.refresh();
     }
     function refreshTaskEndAfterAudio() {
       try {
         fillTaskEndOptions(usageSet && usageSet.taskEnd || null);
-        fillApprovalSoundOptions(usageSet && usageSet.approvalSound || null);
+        fillReminderSoundOptions(approvalSoundSel, approvalSoundDrop, 'approvalSound', usageSet && usageSet.approvalSound);
+        fillReminderSoundOptions(pomodoroSoundSel, pomodoroSoundDrop, 'pomodoroSound', usageSet && usageSet.pomodoroSound);
       } catch (err) {}
     }
     function playTaskEndSound() {
@@ -769,6 +794,38 @@
       }
     } catch (err) {}
     menuBox.appendChild(rowApprovalSound);
+    var rowPomodoroSound = menuRow();
+    rowPomodoroSound.appendChild(menuLabel('番茄钟提醒音效'));
+    rowPomodoroSound.appendChild(pomodoroSoundToggle);
+    rowPomodoroSound.appendChild(pomodoroSoundSel);
+    pomodoroSoundDrop = dshwCustSel(pomodoroSoundSel, {
+      bottom: function () { return usageNavRow; },
+      scrollNames: true
+    });
+    try {
+      var pomodoroSoundWrap = pomodoroSoundSel.parentNode;
+      if (pomodoroSoundWrap) {
+        pomodoroSoundWrap.style.flex = '0 0 120px';
+        pomodoroSoundWrap.style.width = '120px';
+        pomodoroSoundWrap.style.maxWidth = '120px';
+      }
+    } catch (err) {}
+    menuBox.appendChild(rowPomodoroSound);
+    var sourceRow = menuRow();
+    sourceRow.appendChild(menuLabel('额度来源'));
+    var sourceSwitch = document.createElement('div');
+    sourceSwitch.className = 'dshwv-source-switch';
+    var sourceButtons = {};
+    [['codex', 'Codex'], ['claude', 'Claude']].forEach(function (entry) {
+      var button = document.createElement('button');
+      button.type = 'button'; button.textContent = entry[1];
+      button.dataset.source = entry[0];
+      button.addEventListener('click', function (event) { event.stopPropagation(); setDisplaySource(entry[0], true); });
+      sourceButtons[entry[0]] = button;
+      sourceSwitch.appendChild(button);
+    });
+    sourceRow.appendChild(sourceSwitch);
+    menuBox.appendChild(sourceRow);
     var currencyRow = menuRow();
     currencyRow.appendChild(menuLabel('显示币种'));
     var currencySel = document.createElement('select');
@@ -7914,6 +7971,12 @@
       message: '',
       flip: false
     };
+    var displaySource = 'codex';
+    try { if (localStorage.getItem('dshw-display-source') === 'claude') displaySource = 'claude'; } catch (err) {}
+    function syncSourceButtons() {
+      Object.keys(sourceButtons).forEach(function (source) { sourceButtons[source].setAttribute('aria-pressed', String(displaySource === source)); });
+    }
+    syncSourceButtons();
     var SNAP_KEY = 'dshw-snap';
     var SNAP_VER = 3;
     var SNAP_DEFAULTS = {
@@ -8387,7 +8450,9 @@
       if (bubbleScene && bubbleScene.ttlMs > 0) bubbleTtlTimer = setTimeout(bubbleAutoClose, bubbleScene.ttlMs);
     }
     function bubbleRenderDefault(firstSubscriptionQuota) {
-      restoreBubbleLines(firstSubscriptionQuota);
+      if (displaySource === 'claude' && firstSubscriptionQuota && hasSubscriptionQuota()) {
+        bubbleRenderSubscriptionNotice(state.subscription, 'Claude 订阅额度');
+      } else restoreBubbleLines(firstSubscriptionQuota);
     }
     function bubbleRenderRandom(lines) {
       applyBubbleLines(lines);
@@ -8401,7 +8466,7 @@
       line.style.fontWeight = level === 8 ? '700' : '600';
       return line;
     }
-    function bubbleRenderSubscriptionNotice(snapshot) {
+    function bubbleRenderSubscriptionNotice(snapshot, heading) {
       var lines = WhaleUsagePresentation.quotaLines(snapshot);
       // These three elements are deliberately separate from the legacy
       // amount/token fields, so a personal subscription turn cannot inherit
@@ -8418,6 +8483,13 @@
       container.style.display = 'flex';
       container.style.flexDirection = 'column';
       container.style.alignItems = 'center';
+      container.style.maxWidth = '100%';
+      if (heading) {
+        container.style.transform = 'translateY(calc(var(--dshw-u) * -24))';
+        var title = bubbleSubscriptionNoticeLine(heading, 4, 'dshwv-subscription-notice-heading');
+        title.style.color = '#536ba9';
+        container.appendChild(title);
+      }
       var fiveHour = bubbleSubscriptionNoticeLine(
         lines.fiveHour,
         8,
@@ -8439,10 +8511,22 @@
       container.appendChild(fiveHour);
       container.appendChild(sevenDay);
       container.appendChild(reset);
+      if (snapshot?.provider === 'Claude') {
+        var sevenDayReset = bubbleSubscriptionNoticeLine(lines.sevenDayReset, 4, 'dshwv-subscription-notice-reset');
+        sevenDayReset.style.color = 'rgb(159,176,217)';
+        container.appendChild(sevenDayReset);
+      }
       bubbleTarget.appendChild(container);
     }
     function bubbleRenderCost(amount, notice) {
       notice = notice || WhaleTurnNotice.snapshot({ amount: amount }, state.currency);
+      if (notice.provider === 'Claude') {
+        if (WhaleUsagePresentation.hasSubscription(notice.subscription)) {
+          bubbleRenderSubscriptionNotice(notice.subscription, 'Claude 回复完成');
+        } else bubbleRenderModules([{ type: 'text', text: 'Claude 回复完成', size: 7, bold: true },
+          { type: 'text', text: '额度等待更新', size: 4 }]);
+        return;
+      }
       var view = WhaleUsagePresentation.taskBubble(notice, fmt);
       if (view.kind === 'subscription') {
         bubbleRenderSubscriptionNotice(notice.subscriptionRateLimits);
@@ -8506,7 +8590,11 @@
         hideBubble();
         return;
       }
-      if (item.kind === 'random') {
+      if (displaySource === 'claude' && firstSubscriptionQuota) {
+        sceneOpen('normal', function () {
+          bubbleRenderDefault(true);
+        }, BUBBLE_MS, { firstSubscriptionQuota: true });
+      } else if (item.kind === 'random') {
         var lines = pickRandomLines();
         bubbleRandomLines = lines;
         sceneOpen('random', function () {
@@ -8531,7 +8619,7 @@
       return WhaleUsagePresentation.hasSubscription(snapshot || state.subscription);
     }
     function bubbleLabelText(snapshot) {
-      return '当前 API 余额';
+      return displaySource === 'claude' ? 'Claude 订阅额度' : '当前 API 余额';
     }
     function bubbleContentTokenMap(m, snapshot) {
       m = m || ({});
@@ -9045,10 +9133,21 @@
         rank: 3
       });
     }
+    function showClaudeTurnBubble(subscription) {
+      if (!bubbleOn) return;
+      whaleSysPush({ kind: 'cost', amount: null,
+        notice: { provider: 'Claude', completionKind: 'success', subscription: subscription }, rank: 3 });
+    }
     function playApprovalSound() {
       if (!soundOn || usageSet && usageSet.approvalSound && !usageSet.approvalSound.on) return;
       try {
         playSelectedSound(approvalSoundSel.value || 'preset:fx1:release');
+      } catch (err) {}
+    }
+    function playPomodoroSound() {
+      if (!soundOn || usageSet && usageSet.pomodoroSound && !usageSet.pomodoroSound.on) return;
+      try {
+        playSelectedSound(pomodoroSoundSel.value || 'preset:fx1:release');
       } catch (err) {}
     }
     function showApprovalReminder() {
@@ -9211,6 +9310,8 @@
       }, bubbleScene.ttlMs || BUBBLE_MS, { firstSubscriptionQuota: firstSubscriptionQuota });
     }
     function applySubscriptionQuota(subscription) {
+      if (displaySource === 'claude' && subscription?.provider !== 'Claude') return false;
+      if (displaySource === 'codex' && subscription?.provider === 'Claude') return false;
       var view = WhaleUsagePresentation.subscription(subscription);
       if (!view) return false;
       var changed = WhaleUsagePresentation.subscriptionFingerprint(state.subscription) !== WhaleUsagePresentation.subscriptionFingerprint(subscription);
@@ -9226,8 +9327,10 @@
     var subscriptionPolling = false;
     function refreshSubscriptionQuota() {
       if (subscriptionPolling) return;
+      var source = displaySource;
       subscriptionPolling = true;
-      usageClient.subscription().then(function (subscription) {
+      usageClient.subscription(source).then(function (subscription) {
+        if (source !== displaySource) return;
         if (applySubscriptionQuota(subscription)) return;
         if (state.subscription !== null) {
           state.subscription = null;
@@ -9336,15 +9439,55 @@
         cy: cy
       };
     }
+    var lastActivityAt = 0;
+    try {
+      var manuallySelectedAt = Number(localStorage.getItem('dshw-display-source-manual-at') || 0);
+      if (Number.isFinite(manuallySelectedAt) && manuallySelectedAt > 0) lastActivityAt = manuallySelectedAt;
+    } catch (err) {}
+    function setDisplaySource(source, manual) {
+      if (source !== 'codex' && source !== 'claude') return;
+      if (manual) {
+        lastActivityAt = Date.now();
+        try { localStorage.setItem('dshw-display-source-manual-at', String(lastActivityAt)); } catch (err) {}
+      }
+      if (source === displaySource) return;
+      displaySource = source;
+      syncSourceButtons();
+      try { localStorage.setItem('dshw-display-source', source); } catch (err) {}
+      state.subscription = null; state.balance = null; state.balanceText = ''; state.todayUsage = null;
+      state.status = 'loading'; state.message = '';
+      root.title = source === 'claude' ? 'Claude 订阅额度 · 等待更新' : 'Codex 用量';
+      refreshOpenNormalBubble();
+      if (busy) refreshQueued = true; else refresh(false);
+    }
+    function considerActivity(source, timestamp) {
+      var at = typeof timestamp === 'number' ? timestamp : Date.parse(timestamp);
+      if (!Number.isFinite(at) || at <= lastActivityAt) return;
+      lastActivityAt = at;
+      try { localStorage.removeItem('dshw-display-source-manual-at'); } catch (err) {}
+      if (source !== displaySource) setDisplaySource(source, false);
+    }
+    var refreshQueued = false;
     function refresh(manual) {
-      if (busy) return;
+      if (busy) { refreshQueued = true; return; }
       busy = true;
+      var source = displaySource;
       if (manual || !hasBalanceDisplay(state) && !hasSubscriptionQuota()) state.status = 'loading';
-      usageClient.overview({
+      var request = source === 'claude' ? usageClient.subscription('claude').then(function (data) { return { kind: 'claude', data: data }; }) : usageClient.overview({
         manual: !!manual,
         getSubscription: function () { return state.subscription; },
-        onBalanceFallback: function () { state.subscription = null; }
-      }).then(function (result) {
+        onBalanceFallback: function () { if (displaySource === source) state.subscription = null; }
+      });
+      request.then(function (result) {
+        if (source !== displaySource) return;
+        if (result.kind === 'claude') {
+          if (applySubscriptionQuota(result.data)) return;
+          state.subscription = null; state.balance = null; state.balanceText = ''; state.todayUsage = null;
+          state.status = 'error'; state.message = '等待 Claude 回复后更新';
+          root.title = 'Claude 订阅额度 · 等待更新'; img.alt = 'Claude 订阅额度待更新';
+          refreshOpenNormalBubble();
+          return;
+        }
         if (result.kind === 'subscription') { applySubscriptionQuota(result.data); return; }
         if (result.kind === 'retained-subscription') {
           state.status = 'ok';
@@ -9369,11 +9512,13 @@
           }));
         }
       }).catch(function () {
+        if (source !== displaySource) return;
         if (!hasSubscriptionQuota()) {
           Object.assign(state, WhaleUsagePresentation.balance(null).state);
         }
       }).finally(function () {
         busy = false;
+        if (refreshQueued) { refreshQueued = false; refresh(false); }
       });
     }
     var soundOn = true;
@@ -11571,12 +11716,17 @@
           approvalSoundToggle.checked = !!usageSet.approvalSound.on;
           approvalSoundSel.disabled = !usageSet.approvalSound.on;
         }
+        if (usageSet && usageSet.pomodoroSound) {
+          pomodoroSoundToggle.checked = !!usageSet.pomodoroSound.on;
+          pomodoroSoundSel.disabled = !usageSet.pomodoroSound.on;
+        }
         if (usageSet && usageSet.outcomeNotice) {
           failedNoticeToggle.checked = usageSet.outcomeNotice.failed !== false;
           cancelledNoticeToggle.checked = usageSet.outcomeNotice.cancelled !== false;
         }
         fillTaskEndOptions(usageSet && usageSet.taskEnd);
-        fillApprovalSoundOptions(usageSet && usageSet.approvalSound);
+        fillReminderSoundOptions(approvalSoundSel, approvalSoundDrop, 'approvalSound', usageSet && usageSet.approvalSound);
+        fillReminderSoundOptions(pomodoroSoundSel, pomodoroSoundDrop, 'pomodoroSound', usageSet && usageSet.pomodoroSound);
         setTimeout(function () {
           try {
             if (audioFragments && audioFragments.length) refreshTaskEndAfterAudio();
@@ -11694,15 +11844,28 @@
     function pollLastTurn() {
       try {
         usageClient.pollTurn().then(function (result) {
+          if (result.record) considerActivity('codex', result.record.notificationAt || result.record.ts);
           if (!result.fresh) return;
           var notice = WhaleTurnNotice.snapshot(result.record, state.currency);
           if (notice.completionKind === 'success') playTaskEndSound();
           showCostBubble(notice.amount, notice);
         }).catch(function () {});
+        usageClient.pollClaudeTurn().then(function (result) {
+          if (!result.record) return;
+          considerActivity('claude', result.record.completedAt);
+          if (!result.fresh) return;
+          playTaskEndSound();
+          showClaudeTurnBubble(result.record.subscription);
+        }).catch(function () {});
       } catch (err) {}
     }
+    pollLastTurn();
+    usageClient.subscription('claude').then(function (subscription) {
+      if (WhaleUsagePresentation.hasSubscription(subscription)) considerActivity('claude', subscription.observedAt);
+    }).catch(function () {});
     setInterval(pollLastTurn, 1000);
     window.addEventListener('whale-approval-request', showApprovalReminder);
+    window.addEventListener('whale-pomodoro-reminder', playPomodoroSound);
   }
   if (dshwEnabled) {
     try {

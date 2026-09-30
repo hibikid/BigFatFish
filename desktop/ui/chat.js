@@ -5,10 +5,11 @@ import { createChatBilling } from './chat-billing.js';
 const client = createChatClient(), $ = id => document.getElementById(id);
 const composer = $('chat-composer'), input = $('chat-input'), reply = $('chat-reply'), output = $('chat-output');
 const settingsDialog = $('chat-settings'), form = $('chat-settings-form'), status = $('chat-status');
-const display = createCompanionDisplay({ pet: document.querySelector('.dshwv-img'), composer, reply, content: output });
+const display = createCompanionDisplay({ pet: document.querySelector('.dshwv-img'), composer, reply, content: output, timer: $('chat-timer') });
 const billing = createChatBilling({ client, root: $('chat-billing') });
 let turns = [], active = null, loaded = false, loadJob = null, settings = null, busySettings = false, recoveryTimer = null;
 let conversations = [], conversationId = null, busyConversations = false, deletingId = null;
+let currentNotice = null, pomodoro = { phase: 'idle' }, activityPolling = false, advancing = false;
 const drafts = new Map();
 const errorText = error => error?.message || '会话操作失败';
 const field = name => form.elements.namedItem(name);
@@ -58,7 +59,7 @@ function resizeInput() {
 function renderHistory() {
   const history = $('chat-history'); history.replaceChildren();
   for (const turn of turns) {
-    for (const [label, text] of [['我', turn.user], ['角色', turn.text || turn.error || '']]) {
+    for (const [label, text] of [...(turn.user ? [['我', turn.user]] : []), [turn.source === 'pomodoro' ? '番茄钟' : '角色', turn.text || turn.error || '']]) {
       const row = document.createElement('div'), heading = document.createElement('strong'), body = document.createElement('div');
       row.className = 'chat-message'; heading.textContent = label; body.textContent = text;
       row.append(heading, body); history.append(row);
@@ -88,19 +89,24 @@ async function load() {
   return loadJob;
 }
 async function open() {
+  const notice = currentNotice;
   display.open();
   requestAnimationFrame(() => { window.whaleDesktop.keyboardFocus(true); input.focus({ preventScroll: true }); });
   if (!active || active.recovering) { setStatus('正在读取会话'); try { await load(); } catch (error) { loaded = false; controls(); setStatus(errorText(error)); } }
+  if (notice && currentNotice === notice && !active) display.showNotice(notice.text);
   void billing.refresh();
 }
 async function openSettings() {
   if (busySettings) return;
   busySettings = true;
   try {
-    const result = await client.settings(); settings = result.settings;
+    const [result, activity] = await Promise.all([client.settings(), client.activitySettings()]); settings = result.settings;
     for (const name of ['baseUrl', 'model', 'persona', 'maxTokens']) field(name).value = settings[name];
     field('apiKey').value = '';
     field('apiKey').placeholder = settings.hasKey ? '已保存，留空保留' : '';
+    field('proactiveEnabled').checked = activity.settings.enabled;
+    for (const [name, value] of [['proactiveStart', activity.settings.start], ['proactiveEnd', activity.settings.end],
+      ['proactiveMin', activity.settings.minMinutes], ['proactiveMax', activity.settings.maxMinutes], ['proactiveLimit', activity.settings.dailyLimit]]) field(name).value = value;
     $('chat-key-state').textContent = settings.keyStorage === 'encrypted' ? '密钥使用本机加密存储' : '此环境的密钥仅在本次运行期间保留';
     $('chat-settings-error').hidden = true;
     if (!settingsDialog.open) settingsDialog.showModal();
@@ -112,6 +118,7 @@ async function send() {
   if (active || !loaded || busyConversations || !input.value.trim()) return;
   if (!settings?.hasKey || !settings.baseUrl) { await openSettings(); return; }
   const text = input.value.trim(), id = crypto.randomUUID();
+  currentNotice = null; reply.title = '';
   const turn = { id, user: text, text: '', status: 'streaming' };
   active = { id, stopping: false }; turns.push(turn); input.value = ''; resizeInput();
   display.show(''); setStatus('正在回复'); output.setAttribute('aria-busy', 'true'); renderHistory();
@@ -122,7 +129,7 @@ async function send() {
       else if (event.type === 'done') {
         Object.assign(turn, event.turn);
         const item = conversations.find(item => item.id === conversationId);
-        if (item) { item.title = [...turns[0].user.replace(/\s+/g, ' ')].slice(0, 48).join(''); item.messages = turns.length; item.updatedAt = new Date().toISOString(); }
+        if (item) { if (item.kind !== 'spontaneous') item.title = [...String(turns[0].user || '').replace(/\s+/g, ' ')].slice(0, 48).join(''); item.messages = turns.length; item.updatedAt = new Date().toISOString(); }
         renderConversations();
         setStatus(turn.error || (turn.finishReason === 'length' ? '已达到回复长度上限' : ''));
       }
@@ -151,6 +158,7 @@ async function changeConversation(operation) {
   try {
     const history = await operation(); deletingId = null; applyHistory(history);
     input.value = drafts.get(conversationId) || '';
+    currentNotice = null; reply.title = '';
     display.show(turns.at(-1)?.text || '');
     $('chat-history').hidden = false; $('chat-show-history').setAttribute('aria-expanded', 'true');
     setStatus(turns.at(-1)?.error || ''); resizeInput();
@@ -171,7 +179,11 @@ form.addEventListener('submit', async event => {
   if (busySettings) return;
   busySettings = true; $('chat-settings-save').disabled = true;
   try {
-    const result = await client.save(Object.fromEntries(new FormData(form)));
+    const values = Object.fromEntries(new FormData(form));
+    const activity = { enabled: field('proactiveEnabled').checked, start: values.proactiveStart, end: values.proactiveEnd,
+      minMinutes: Number(values.proactiveMin), maxMinutes: Number(values.proactiveMax), dailyLimit: Number(values.proactiveLimit) };
+    const result = await client.save(values);
+    await client.saveActivitySettings(activity);
     settings = result.settings; field('apiKey').value = ''; settingsDialog.close();
     billing.reset(); void billing.refresh({ force: true });
     setStatus(''); window.whaleToast('会话设置已保存');
@@ -182,7 +194,7 @@ settingsDialog.addEventListener('close', () => { field('apiKey').value = ''; if 
 $('chat-settings-close').addEventListener('click', () => settingsDialog.close());
 $('chat-settings-cancel').addEventListener('click', () => settingsDialog.close());
 $('chat-open-settings').addEventListener('click', openSettings);
-$('chat-close').addEventListener('click', () => display.close());
+$('chat-close').addEventListener('click', () => { currentNotice = null; reply.title = ''; display.close(); });
 $('chat-send').addEventListener('click', send);
 $('chat-stop').addEventListener('click', stop);
 $('chat-new').addEventListener('click', newConversation);
@@ -196,7 +208,7 @@ $('chat-show-history').addEventListener('click', () => {
   $('chat-show-history').setAttribute('aria-expanded', String(!history.hidden)); display.layout();
   if (!history.hidden) {
     const text = turns.findLast(turn => turn.text)?.text;
-    if (text) display.show(text);
+    if (text) { currentNotice = null; reply.title = ''; display.show(text); }
   }
 });
 input.addEventListener('input', resizeInput);
@@ -205,7 +217,59 @@ input.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); }
   if (event.key === 'Escape') { event.preventDefault(); display.close(); }
 });
-reply.addEventListener('click', () => display.hideReply());
+function renderPomodoro() {
+  const badge = $('chat-timer'), state = pomodoro;
+  const labels = { focus: '专注', break: '休息', await_break: '待休息', await_focus: '待专注', paused: '已暂停' };
+  if (!labels[state.phase]) { badge.hidden = true; return; }
+  const seconds = state.dueAt ? Math.max(0, Math.ceil((state.dueAt - Date.now()) / 1000)) : state.remainingSeconds;
+  const clock = Number.isFinite(seconds) ? ' ' + String(Math.floor(seconds / 60)).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0') : '';
+  badge.textContent = labels[state.phase] + ' ' + state.cycle + '/' + state.cycles + clock;
+  badge.hidden = false; display.layout();
+}
+async function pollActivity() {
+  if (activityPolling) return;
+  activityPolling = true;
+  try {
+    await client.presence(!composer.hidden || !!document.querySelector('.dshwv-pop-open'));
+    const result = await client.activity(); pomodoro = result.pomodoro; renderPomodoro();
+    if (document.hidden || active || advancing || !result.notices.length) return;
+    const notice = result.notices.find(item => item.kind === 'pomodoro') || result.notices[0];
+    if (currentNotice?.seq === notice.seq) return;
+    if (currentNotice && notice.kind !== 'pomodoro') return;
+    currentNotice = notice;
+    reply.title = notice.advance ? notice.advance.phase === 'await_break' ? '开始休息' : '开始下一轮专注' : '';
+    display.showNotice(notice.text);
+    if (notice.kind === 'pomodoro') window.dispatchEvent(new Event('whale-pomodoro-reminder'));
+    await client.ackActivity(notice.seq);
+    if (loaded) applyHistory(await client.history());
+  } catch {} finally { activityPolling = false; }
+}
+reply.addEventListener('click', async () => {
+  if (advancing) return;
+  if (!currentNotice) { display.hideReply(); return; }
+  const notice = currentNotice;
+  if (notice.kind === 'pomodoro') {
+    advancing = true;
+    try {
+      if (notice.advance) {
+        const result = await client.advancePomodoro(notice.advance);
+        pomodoro = result.pomodoro; renderPomodoro();
+      }
+      if (currentNotice === notice) { currentNotice = null; reply.title = ''; display.hideReply(); }
+    } catch (error) { window.whaleToast(errorText(error)); }
+    finally { advancing = false; }
+    return;
+  }
+  currentNotice = null; reply.title = ''; display.hideReply();
+  await open();
+  if (notice.conversationId && notice.conversationId !== conversationId) await switchConversation(notice.conversationId);
+  if (!turns.at(-1)?.text) display.show(notice.text);
+});
+$('chat-reply-close').addEventListener('click', event => { event.stopPropagation(); currentNotice = null; reply.title = ''; display.hideReply(); });
 window.addEventListener('whale-chat-open', open);
 window.addEventListener('whale-open-chat-settings', openSettings);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void pollActivity(); });
+setInterval(renderPomodoro, 1000);
+setInterval(() => { void pollActivity(); }, 3000);
+void pollActivity();
 controls();

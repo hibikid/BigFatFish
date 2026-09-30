@@ -1,28 +1,39 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { readJson, writeJson } from '../paths.mjs';
 import { complete, completionUrl } from './provider.mjs';
 import { ChatBilling } from './billing.mjs';
-import { billingUsage } from './deepseek-pricing.mjs';
+import { billingUsage, officialDeepSeek } from './deepseek-pricing.mjs';
 import { Conversations } from './conversations.mjs';
+import { ChatActivity, POMODORO_TOOLS } from './activity.mjs';
+import { localTimeContext } from './time-context.mjs';
 
 const DEFAULTS = { baseUrl: '', model: 'deepseek-flash', persona: '', maxTokens: 1024 };
 const KEY_REF = 'whale_chat_api_key_v1';
 const NEXT_KEY_REF = KEY_REF + '_next';
 const json = (status, value) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8' }, body: Buffer.from(JSON.stringify(value)) });
 function savedAt(file) { try { return fs.statSync(file).mtimeMs; } catch { return Infinity; } }
+function addUsage(total, usage) {
+  const result = { ...total };
+  for (const [key, value] of Object.entries(usage)) if (typeof value === 'number' && Number.isFinite(value)) result[key] = (result[key] || 0) + value;
+  return result;
+}
 
 export class ChatService {
-  constructor({ dataDir, secretVault, fetchImpl = fetch, idleMs = 60000, timeoutMs = 180000 }) {
+  constructor({ dataDir, secretVault, fetchImpl = fetch, idleMs = 60000, timeoutMs = 180000, canProactive = () => true, onNotice = () => {}, now = Date.now, activityOptions = {} }) {
     this.configFile = path.join(dataDir, 'chat-settings.json');
     const stored = readJson(this.configFile, {});
     this.settings = { ...DEFAULTS, ...stored, keyRef: typeof stored.keyRef === 'string' ? stored.keyRef : stored.baseUrl ? KEY_REF : '' };
     this.settingsSavedAt = savedAt(this.configFile);
     this.conversations = new Conversations(dataDir);
-    this.vault = secretVault; this.fetchImpl = fetchImpl; this.memoryKey = ''; this.active = null;
+    this.vault = secretVault; this.fetchImpl = fetchImpl; this.memoryKey = ''; this.active = null; this.background = null;
     this.cancelledIds = new Set();
     this.idleMs = idleMs; this.timeoutMs = timeoutMs;
+    this.now = activityOptions.now || now;
     this.billing = new ChatBilling({ dataDir, fetchImpl });
+    this.activity = new ChatActivity({ dataDir, canProactive: () => canProactive() && !this.active && !this.background,
+      onProactive: () => this.proactive(), onReminder: state => this.reminder(state), onNotice, now: this.now, ...activityOptions });
   }
   key() { return this.memoryKey || (this.settings.keyRef ? this.vault?.read(this.settings.keyRef)?.value : '') || ''; }
   get turns() { return this.conversations.current.turns; }
@@ -62,6 +73,63 @@ export class ChatService {
   }
   history() { return { turns: structuredClone(this.turns), activeId: this.active?.id || null,
     conversationId: this.conversations.currentId, conversations: this.conversations.list() }; }
+  activitySnapshot() { return this.activity.snapshot(); }
+  context(turns) {
+    const messages = turns.filter(turn => turn.status === 'completed').slice(-20).flatMap(turn => [
+      ...(turn.user ? [{ role: 'user', content: turn.user }] : []), ...(turn.text ? [{ role: 'assistant', content: turn.text }] : [])
+    ]);
+    while (messages.length && messages.reduce((n, message) => n + message.content.length, 0) > 48000) messages.shift();
+    return messages;
+  }
+  async backgroundReply(prompt, kind, conversationId, includeHistory = true) {
+    if (this.active || this.background || !this.key() || !this.settings.baseUrl) return null;
+    const key = this.key(), settings = { ...this.settings, maxTokens: Math.min(160, this.settings.maxTokens) };
+    const controller = new AbortController(), id = randomUUID(), createdAt = new Date().toISOString();
+    const request = { id, model: settings.model, createdAt, status: 'streaming' };
+    const background = { controller };
+    background.done = new Promise(resolve => { background.resolve = resolve; });
+    this.background = background;
+    const timeout = setTimeout(() => controller.abort(), Math.min(kind === 'pomodoro' ? 8000 : 30000, this.timeoutMs));
+    timeout.unref();
+    this.billing.record(request, { baseUrl: settings.baseUrl, key });
+    let text = '', generated = false;
+    try {
+      const messages = [
+        ...(settings.persona ? [{ role: 'system', content: settings.persona }] : []),
+        { role: 'system', content: localTimeContext(this.now()) },
+        { role: 'system', content: '按角色人设说一两句自然、简短的话。沿用过往对话的语言；没有上下文时用中文。不要声称看到了用户正在做什么，也不要假装执行了工具。' },
+        ...(includeHistory ? this.context(kind === 'proactive' ? this.conversations.allTurns().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(-12) : this.conversations.items.find(item => item.id === conversationId)?.turns || []) : []),
+        { role: 'user', content: prompt }
+      ];
+      for await (const event of complete({ settings, key, messages, fetchImpl: this.fetchImpl, signal: controller.signal })) {
+        if (event.type === 'delta') text += event.text;
+        if (event.type === 'usage') request.usage = billingUsage(event.usage) || undefined;
+        if (text.length > 2000) throw new Error('回复内容过长');
+      }
+      if (!text.trim() || controller.signal.aborted) return null;
+      generated = true;
+      request.status = 'completed';
+      const target = kind === 'proactive' ? this.conversations.spontaneous() : this.conversations.items.find(item => item.id === conversationId) || this.conversations.spontaneous();
+      this.conversations.appendTo(target.id, { id, user: '', text: text.trim(), status: 'completed', source: kind, createdAt, model: settings.model, usage: request.usage, requests: [request] });
+      return { text: text.trim(), conversationId: target.id };
+    } catch { return null; }
+    finally {
+      clearTimeout(timeout);
+      request.status = controller.signal.aborted ? 'cancelled' : generated ? 'completed' : 'failed';
+      this.billing.record(request, { baseUrl: settings.baseUrl, key });
+      if (this.background === background) this.background = null;
+      background.resolve();
+    }
+  }
+  proactive() {
+    const useHistory = this.activity.random() < 0.5;
+    return this.backgroundReply(useHistory ? '结合我们最近聊过的一件事，主动和我随便聊一句。不要推测我现在正在做什么。' :
+      '按你的人设，主动发起一个轻松的新话题。不要推测我现在正在做什么。', 'proactive', undefined, useHistory);
+  }
+  async reminder(state) {
+    const prompt = `番茄钟状态：${state.phase}；第 ${state.cycle}/${state.cycles} 轮；专注 ${state.focusMinutes} 分钟，休息 ${state.breakMinutes} 分钟。请按人设简短提醒我${state.phase === 'await_break' ? '专注结束，可以准备休息了' : state.phase === 'await_focus' ? '休息结束，可以准备下一轮专注了' : '本次专注已经完成'}。阶段尚未开始，不要宣称已经开始，不要要求我发送消息确认，也不要解释界面操作。`;
+    return this.backgroundReply(prompt, 'pomodoro', state.conversationId);
+  }
   persist() { this.conversations.persist(); }
   changeConversation(action, id) {
     if (this.active) throw new Error('请先停止回复，再操作会话列表');
@@ -93,17 +161,18 @@ export class ChatService {
     this.recoverBilling(key);
     const controller = new AbortController(), settings = { ...this.settings };
     if (this.cancelledIds.has(id)) controller.abort();
-    const messages = this.turns.filter(turn => turn.status === 'completed').slice(-20).flatMap(turn => [
-      { role: 'user', content: turn.user }, { role: 'assistant', content: turn.text }
-    ]);
-    const remaining = 48000;
-    while (messages.length && messages.reduce((n, message) => n + message.content.length, 0) > remaining) messages.splice(0, 2);
-    if (settings.persona) messages.unshift({ role: 'system', content: settings.persona });
-    messages.push({ role: 'user', content: text });
-    const turn = { id, user: text, text: '', status: 'streaming', createdAt: new Date().toISOString(), model: settings.model };
+    this.background?.controller.abort();
+    const toolsAllowed = officialDeepSeek(settings.baseUrl);
+    const messages = [
+      ...(settings.persona ? [{ role: 'system', content: settings.persona }] : []),
+      { role: 'system', content: localTimeContext(this.now()) },
+      ...(toolsAllowed ? [{ role: 'system', content: '番茄钟工具已经预授权，会在本地立即执行。仅用于用户请求设置或控制计时、回应计时提醒；日常闲聊不要调用。可偶尔按情况建议合理的专注与休息时长，或询问缺失的信息。深夜请求开始番茄钟时，可以依人设先劝休息、建议缩短，或询问用户是否仍想继续；选择先询问时不要调用设置工具，用户明确坚持后可以执行。调用成功后说明实际安排；调用失败不要宣称已执行。' }] : []),
+      ...this.context(this.turns),
+      { role: 'user', content: text }
+    ];
+    const turn = { id, user: text, text: '', status: 'streaming', source: 'user', createdAt: new Date().toISOString(), model: settings.model, requests: [] };
     this.turns.push(turn); this.persist();
-    const billedRequest = !controller.signal.aborted;
-    if (billedRequest) this.billing.record(turn, { baseUrl: settings.baseUrl, key });
+    try { this.activity.userActivity(); } catch {}
     this.active = { id, controller };
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
@@ -118,16 +187,38 @@ export class ChatService {
         resetIdle(); emit({ type: 'start' });
         this.active.job = (async () => {
           try {
-            for await (const event of complete({ settings, key, messages, fetchImpl: this.fetchImpl, signal: controller.signal })) {
+            for (let round = 0; round < 3; round++) {
               if (controller.signal.aborted) throw new Error('aborted');
-              resetIdle();
-              if (event.type === 'delta') {
-                turn.text += event.text;
-                if (turn.text.length > 128000) throw new Error('回复内容超过本地长度限制');
-                emit(event);
-              } else if (event.type === 'finish') turn.finishReason = event.reason;
-              else if (event.type === 'usage') {
-                turn.usage = billingUsage(event.usage) || undefined;
+              const request = { id: round ? id + ':' + round : id, model: settings.model, createdAt: new Date().toISOString(), status: 'streaming' };
+              turn.requests.push(request); this.billing.record(request, { baseUrl: settings.baseUrl, key });
+              let calls = null, roundText = '', reasoning = '';
+              try {
+                for await (const event of complete({ settings, key, messages, fetchImpl: this.fetchImpl, signal: controller.signal, tools: toolsAllowed && round < 2 ? POMODORO_TOOLS : null })) {
+                  if (controller.signal.aborted) throw new Error('aborted');
+                  resetIdle();
+                  if (event.type === 'delta') {
+                    roundText += event.text; turn.text += event.text;
+                    if (turn.text.length > 128000) throw new Error('回复内容超过本地长度限制');
+                    emit(event);
+                  } else if (event.type === 'finish' && event.reason !== 'tool_calls') turn.finishReason = event.reason;
+                  else if (event.type === 'usage') request.usage = billingUsage(event.usage) || undefined;
+                  else if (event.type === 'tool_calls') { calls = event.calls; reasoning = event.reasoning; }
+                }
+                request.status = 'completed';
+              } catch (error) { request.status = controller.signal.aborted ? 'cancelled' : 'failed'; throw error; }
+              finally {
+                if (request.usage) turn.usage = addUsage(turn.usage, request.usage);
+                this.billing.record(request, { baseUrl: settings.baseUrl, key });
+              }
+              if (!calls) break;
+              const assistant = { role: 'assistant', content: roundText || null, tool_calls: calls };
+              if (reasoning) assistant.reasoning_content = reasoning;
+              messages.push(assistant);
+              for (const call of calls) {
+                let result;
+                try { result = this.activity.tool({ name: call.function.name, arguments: call.function.arguments }, this.conversations.currentId); }
+                catch { result = { ok: false, error: '操作未能保存' }; }
+                messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
               }
             }
             if (controller.signal.aborted) throw new Error('aborted');
@@ -136,10 +227,9 @@ export class ChatService {
           } catch (error) {
             turn.status = controller.signal.aborted && !timedOut ? 'cancelled' : 'failed';
             turn.error = timedOut ? '回复超时，请重试' : controller.signal.aborted ? '已停止生成' :
-              error.message.includes(key) ? '会话请求失败，请检查设置后重试' : error.message.startsWith('会话接口') || error.message.startsWith('连接提前') || error.message.startsWith('模型没有') || error.message.startsWith('此会话') || error.message.startsWith('回复内容') ? error.message : '会话连接失败，请检查网络或接口地址';
+              error.message.includes(key) ? '会话请求失败，请检查设置后重试' : error.message.startsWith('会话接口') || error.message.startsWith('连接提前') || error.message.startsWith('模型没有') || error.message.startsWith('模型工具') || error.message.startsWith('回复内容') ? error.message : '会话连接失败，请检查网络或接口地址';
           } finally {
             clearTimeout(timer); clearTimeout(idle); signal?.removeEventListener('abort', abort);
-            if (billedRequest) this.billing.record(turn, { baseUrl: settings.baseUrl, key });
             try { this.persist(); }
             catch { turn.status = 'failed'; turn.error = '回复已收到，但本地历史保存失败'; }
             this.active = null;
@@ -174,10 +264,25 @@ export class ChatService {
         const key = this.key(); this.recoverBilling(key);
         return json(200, { ok: true, billing: await this.billing.summary({ baseUrl: this.settings.baseUrl, key, force: url.searchParams.get('refresh') === '1' }) });
       }
+      if (url.pathname === '/api/chat/activity' && method === 'GET') return json(200, { ok: true, ...this.activitySnapshot() });
+      if (url.pathname === '/api/chat/activity/settings') {
+        if (method === 'GET') return json(200, { ok: true, settings: this.activity.settings() });
+        if (method === 'PUT') return json(200, { ok: true, settings: this.activity.saveSettings(input()) });
+      }
+      if (url.pathname === '/api/chat/activity/ack' && method === 'POST') { this.activity.ack(input().seq); return json(200, { ok: true }); }
+      if (url.pathname === '/api/chat/activity/advance' && method === 'POST') return json(200, this.activity.advance(input()));
+      if (url.pathname === '/api/chat/activity/presence' && method === 'POST') { this.activity.setPresence(input()); return json(200, { ok: true }); }
       if (url.pathname === '/api/chat/message' && method === 'POST') return this.start(input(), signal);
       if (url.pathname === '/api/chat/stop' && method === 'POST') return json(200, { ok: true, stopped: this.stop(input().id) });
       return json(405, { ok: false, error: '不支持的会话操作' });
     } catch (error) { return json(400, { ok: false, error: error instanceof SyntaxError ? '会话数据格式无效' : error.message }); }
   }
-  async close() { if (this.active) { this.active.controller.abort(); await this.active?.job; } this.memoryKey = ''; }
+  async close() {
+    this.activity.close();
+    const background = this.background;
+    background?.controller.abort();
+    if (this.active) { this.active.controller.abort(); await this.active?.job; }
+    await background?.done;
+    this.memoryKey = '';
+  }
 }

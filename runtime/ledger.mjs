@@ -157,6 +157,7 @@ export function usageDefaults() {
   return {
     taskEnd: { on: false, sel: '' },
     approvalSound: { on: true, sel: 'preset:fx1:release' },
+    pomodoroSound: { on: true, sel: 'preset:fx1:release' },
     outcomeNotice: { failed: true, cancelled: true },
     alert: { on: true, below: 5, msg: '余额已低于 {currency}{below}', lines: [
       { type: 'text', text: '老大～你的 API 余额', size: 5, bold: true },

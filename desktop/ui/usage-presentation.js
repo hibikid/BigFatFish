@@ -25,32 +25,38 @@
     };
   }
   function hasSubscription(value) {
+    if (value?.provider === 'Claude') return !!(value.available !== false && [value.fiveHour, value.sevenDay].some(window =>
+      window && Number.isFinite(Number(window.remainingPercent))));
     return !!(value && value.available !== false && value.fiveHour && value.sevenDay &&
       Number.isFinite(Number(value.fiveHour.remainingPercent)) && Number.isFinite(Number(value.sevenDay.remainingPercent)));
   }
   function subscriptionFingerprint(value) {
     if (!hasSubscription(value)) return '';
-    return [value.planType || '', value.fiveHour.remainingPercent, value.fiveHour.resetsAt,
-      value.sevenDay.remainingPercent, value.sevenDay.resetsAt].join('|');
+    return [value.provider || 'Codex', value.planType || '', value.fiveHour?.remainingPercent, value.fiveHour?.resetsAt,
+      value.sevenDay?.remainingPercent, value.sevenDay?.resetsAt].join('|');
   }
   function subscription(value) {
     if (!hasSubscription(value)) return null;
     const plan = value.planType ? ' · ' + String(value.planType).toUpperCase() : '';
+    const provider = value.provider === 'Claude' ? 'Claude' : 'Codex';
+    const origin = provider === 'Claude' ? 'Claude 状态栏快照' : '来自本机会话额度快照';
     return { state: { subscription: value, message: '', status: 'ok' },
-      title: 'Codex 订阅额度' + plan + '（来自本机会话额度快照）', alt: 'Codex 订阅额度' };
+      title: provider + ' 订阅额度' + plan + '（' + origin + (provider === 'Claude' && value.observedAt ? ' · ' + new Date(value.observedAt).toLocaleString('zh-CN') : '') + '）', alt: provider + ' 订阅额度' };
   }
   function quotaPercent(window) {
     const value = Number(window?.remainingPercent);
     return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) + '%' : '--';
   }
-  function quotaResetTime(window) {
+  function quotaResetTime(window, includeDate = false) {
     const ms = Date.parse(window?.resetsAt || '');
     if (!Number.isFinite(ms)) return '';
-    return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
+    return new Intl.DateTimeFormat('zh-CN', { ...(includeDate ? { month: 'numeric', day: 'numeric' } : {}),
+      hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
   }
   function quotaLines(value) {
     return { fiveHour: '5小时剩余' + quotaPercent(value?.fiveHour), sevenDay: '7天剩余' + quotaPercent(value?.sevenDay),
-      reset: '5小时重置' + (quotaResetTime(value?.fiveHour) || '--:--') };
+      reset: '5小时重置' + (quotaResetTime(value?.fiveHour) || '--:--'),
+      sevenDayReset: '7天重置 ' + (quotaResetTime(value?.sevenDay, true) || '--') };
   }
   function hasBalance(value) {
     return !!value?.balanceText || value?.balance !== null && value?.balance !== undefined;

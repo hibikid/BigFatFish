@@ -21,7 +21,7 @@ export class ChatBilling {
   recoverHistory(turns, { baseUrl, key, settingsSavedAt }) {
     if (!officialDeepSeek(baseUrl) || !key || !Number.isFinite(settingsSavedAt)) return;
     const now = this.now();
-    for (const turn of turns) {
+    for (const turn of turns.flatMap(turn => Array.isArray(turn.requests) && turn.requests.length ? turn.requests : [turn])) {
       const timestamp = Date.parse(turn.createdAt);
       // Legacy history has no account identity. Only recover calls made after
       // the current credentials were saved, and never reassign an existing row.

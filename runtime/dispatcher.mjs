@@ -9,6 +9,7 @@ import { migrateData, stripRetiredModules } from './migration.mjs';
 import { createFxService } from './fx.mjs';
 import { MEDIA_POLICY } from '../lib/media-validation.mjs';
 import { ChatService } from './chat/service.mjs';
+import { claudeLastTurn, claudeSubscription } from './claude-usage.mjs';
 
 export const UI_ORIGIN = 'whale://widget';
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.gif': 'image/gif', '.mp3': 'audio/mpeg' };
@@ -16,7 +17,7 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inl
 const jsonResult = (status, payload) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8' }, body: Buffer.from(JSON.stringify(payload)) });
 
 // Dispatch original resource handlers entirely in process; no HTTP listener exists.
-export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVault = null, monitor = true, autoRefresh = true, fetchImpl, fxFetchImpl = fetchImpl, chatFetchImpl = fetchImpl, onStop = () => {}, onShow = () => {}, statusInfo = () => ({}) } = {}) {
+export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVault = null, monitor = true, autoRefresh = true, fetchImpl, fxFetchImpl = fetchImpl, chatFetchImpl = fetchImpl, chatActivityOptions = {}, onStop = () => {}, onShow = () => {}, onChatNotice = () => {}, statusInfo = () => ({}) } = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
   migrateData(dataDir);
   const whale = service || new WhaleService({ dataDir, secretVault, ...(fetchImpl ? { fetchImpl } : {}) });
@@ -52,11 +53,15 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
       const parsed = () => JSON.parse(bytes.toString('utf8') || '{}');
       if (url.pathname.startsWith('/api/chat/')) {
         if (bytes.length > 128 * 1024) return jsonResult(413, { ok: false, error: '会话请求过大' });
-        chat ||= new ChatService({ dataDir, secretVault, ...(chatFetchImpl ? { fetchImpl: chatFetchImpl } : {}) });
+        chat ||= new ChatService({ dataDir, secretVault, canProactive: () => statusInfo().visible !== false, onNotice: onChatNotice,
+          activityOptions: chatActivityOptions,
+          ...(chatFetchImpl ? { fetchImpl: chatFetchImpl } : {}) });
         return chat.dispatch(url, { method, body: bytes, signal });
       }
       if (url.pathname === '/api/status' && method === 'GET') return jsonResult(200, { ok: true, version: VERSION, buildVersion, transport: 'local-ipc', webpage: false, provider: whale.config.publicInfo(), monitor: watcher?.status() || { watching: 0, activeTurns: 0 }, subscriptionRateLimits: whale.subscriptionRateLimits(), dataDir, ...statusInfo() });
       if (url.pathname === '/api/subscription-rate-limits' && method === 'GET') return jsonResult(200, whale.subscriptionRateLimits());
+      if (url.pathname === '/api/claude/subscription' && method === 'GET') return jsonResult(200, claudeSubscription(dataDir));
+      if (url.pathname === '/api/claude/last-turn' && method === 'GET') return jsonResult(200, claudeLastTurn(dataDir));
       if (url.pathname === '/api/config') {
         if (method === 'GET') return jsonResult(200, { ok: true, ...whale.config.publicInfo() });
         if (method === 'PUT') {

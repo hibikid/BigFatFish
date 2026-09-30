@@ -4,7 +4,10 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ConfigStore } from '../runtime/config.mjs';
 import { WhaleService } from '../runtime/service.mjs';
+import { saveClaudeTurn, saveClaudeUsage } from '../runtime/claude-usage.mjs';
 import { bridgeRequest } from '../runtime/bridge.mjs';
+
+let clockOffset = 0;
 
 export async function makeFixture(dataDir) {
   const codexHome = process.env.CODEX_HOME;
@@ -19,6 +22,19 @@ export async function makeFixture(dataDir) {
       { currency: 'CNY', total_balance: (110 - completedChatCalls * 0.001).toFixed(3), granted_balance: '10', topped_up_balance: '100' }
     ] });
     const input = JSON.parse(body), last = input.messages.at(-1).content;
+    if (last === '启动番茄钟') return new Response('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [
+      { index: 0, id: 'timer_call', type: 'function', function: { name: 'pomodoro_set', arguments: '{"focusMinutes":30,"breakMinutes":5,"cycles":2}' } }
+    ] } }] }) + '\n\ndata: ' + JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: {
+      prompt_tokens: 1000, prompt_cache_hit_tokens: 200, prompt_cache_miss_tokens: 800, completion_tokens: 100, total_tokens: 1100
+    } }) + '\n\ndata: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
+    if (input.messages.at(-1).role === 'tool') {
+      assert.equal(JSON.parse(last).ok, true);
+      completedChatCalls++;
+      return new Response('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { content: '好，专注三十分钟，休息五分钟，循环两轮。' } }] }) + '\n\ndata: ' +
+        JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: {
+          prompt_tokens: 1000, prompt_cache_hit_tokens: 200, prompt_cache_miss_tokens: 800, completion_tokens: 100, total_tokens: 1100
+        } }) + '\n\ndata: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
+    }
     const text = last.includes('long') ? '这是逐步输出的长回复。'.repeat(90) : '第一行回复\n第二行回复';
     let timer;
     const stream = new ReadableStream({ start(controller) {
@@ -43,7 +59,7 @@ export async function makeFixture(dataDir) {
     }, cancel() { clearTimeout(timer); } });
     return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
   };
-  return { service, monitor: false, autoRefresh: false, chatFetchImpl, fxFetchImpl: async () => Response.json({ date: new Date().toISOString().slice(0, 10), usd: { cny: 7 } }) };
+  return { service, monitor: false, autoRefresh: false, chatFetchImpl, chatActivityOptions: { now: () => Date.now() + clockOffset }, fxFetchImpl: async () => Response.json({ date: new Date().toISOString().slice(0, 10), usd: { cny: 7 } }) };
 }
 
 function wav() {
@@ -57,7 +73,10 @@ function wav() {
 
 export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, setTestCursor, setTestViewport, activateChatShortcut, chatShortcutAvailable, renderInfo }) {
   const phase = process.env.WHALE_TEST_PHASE, output = process.env.WHALE_TEST_OUTPUT, passed = [], layouts = [];
-  const js = source => window.webContents.executeJavaScript(source);
+  const js = async source => {
+    try { return await window.webContents.executeJavaScript(source); }
+    catch (error) { throw new Error(error.message + ' Source: ' + source, { cause: error }); }
+  };
   async function until(source, message) {
     for (let i = 0; i < 100; i++) {
       if (await js(`Boolean(${source})`)) return;
@@ -70,6 +89,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
   const status = () => js('window.__whaleRenderTest.status()');
   const saved = () => dispatcher.whale.readUsageSettings().approvalSound;
   const row = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('审批提醒音效'))";
+  const timerRow = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('番茄钟提醒音效'))";
   async function approval() {
     await delay(800);
     const result = await bridgeRequest('/internal/approval-request', { method: 'POST', body: { event: 'PermissionRequest' }, dataDir });
@@ -124,6 +144,15 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     assert.equal(typeof chatShortcutAvailable, 'boolean');
     activateChatShortcut();
     await until("!document.getElementById('chat-composer').hidden && document.activeElement === document.getElementById('chat-input')", 'Ctrl+0 did not open a focused chat composer');
+    assert.equal(app.isActive(), true, 'chat has DOM focus but the macOS application is inactive, so native IME has no active client');
+    for (let i = 0; !window.isFocused() && i < 30; i++) await delay(100);
+    assert.equal(window.isFocused(), true, 'chat must acquire native window focus before testing a later loss of focus');
+    window.blur();
+    for (let i = 0; window.isFocused() && i < 30; i++) await delay(100);
+    assert.equal(window.isFocused(), false, 'native blur must finish before reopening chat');
+    activateChatShortcut();
+    for (let i = 0; !window.isFocused() && i < 30; i++) await delay(100);
+    assert.equal(window.isFocused(), true, 'Ctrl+0 must restore native focus even when the composer is already open');
     await js("document.getElementById('chat-show-history').focus()");
     activateChatShortcut();
     await until("document.activeElement === document.getElementById('chat-input')", 'Ctrl+0 did not refocus an open composer');
@@ -132,23 +161,40 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
       'Ctrl+0 is occupied by another instance; the same shortcut handler opens and refocuses chat input');
   }
 
+  if (phase === 'input') {
+    assert.equal(process.platform, 'darwin', 'native input focus check requires macOS');
+    assert.deepEqual(errors, []);
+    fs.writeFileSync(path.join(output, phase + '.json'), JSON.stringify({ phase, passed, rendererErrors: errors }, null, 2));
+    await dispatcher.close();
+    app.quit();
+    return;
+  }
+
   if (phase === 'restart') {
     const config = await dispatcher.dispatch('/api/chat/settings');
     assert.equal(JSON.parse(config.body).settings.hasKey, true, 'chat key did not survive restart');
     await click('.dshwv-img', 'right');
     await until("document.activeElement === document.getElementById('chat-input') && !document.getElementById('chat-composer').hidden", 'chat did not focus after restart');
-    await until("document.getElementById('chat-output').textContent.includes('第一行回复')", 'chat history did not survive restart');
+    await until("document.getElementById('chat-output').textContent.includes('专注三十分钟')", 'chat history did not survive restart');
     await until("document.querySelector('[data-chat-spent]').textContent.includes('约') && document.querySelector('[data-chat-balance]').textContent.includes('¥110')", 'chat billing did not survive restart');
     assert.ok(JSON.parse((await dispatcher.dispatch('/api/chat/billing')).body).billing.recorded > 0);
     assert.equal(await js("document.querySelector('[data-chat-spent]').textContent.match(/¥\\d+\\.\\d{2}$/) !== null"), true);
+    await until("!document.getElementById('chat-timer').hidden && document.getElementById('chat-timer').textContent.includes('专注 1/2')", 'Pomodoro did not resume after restart');
+    assert.equal(JSON.parse((await dispatcher.dispatch('/api/chat/activity/settings')).body).settings.enabled, true);
     await js("document.getElementById('chat-close').click()");
-    passed.push('chat configuration and conversation survive a full process restart');
+    passed.push('chat, proactive settings and active Pomodoro survive a full process restart');
     const pref = saved();
     assert.ok(pref.on && pref.sel.startsWith('frag:'));
     await until(`(${row}).querySelector('select').value === ${JSON.stringify(pref.sel)}`, 'custom sound selection did not survive restart');
     await approval();
     assert.ok((await js('window.__playedAudio')).some(url => url.includes(pref.sel.slice(5))));
     passed.push('custom approval sound survives a full Electron process restart');
+    const timerPref = dispatcher.whale.readUsageSettings().pomodoroSound;
+    assert.deepEqual(timerPref, pref);
+    await until(`(${timerRow}).querySelector('select').value === ${JSON.stringify(timerPref.sel)}`, 'custom Pomodoro sound did not survive restart');
+    await js("window.__playedAudio = []; window.dispatchEvent(new Event('whale-pomodoro-reminder'))");
+    assert.ok((await js('window.__playedAudio')).some(url => url.includes(timerPref.sel.slice(5))));
+    passed.push('custom Pomodoro reminder sound survives a full Electron process restart');
     await capture('restart-approval');
   } else {
     await click('.dshwv-img', 'right');
@@ -211,6 +257,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     })();` });
     window.webContents.reload();
     await until("window.__chatStreamCutTest && !!window.__whaleRenderTest && !!document.getElementById('chat-input')", 'chat reload failed');
+    await js('window.__playedAudio = []; HTMLMediaElement.prototype.play = function () { window.__playedAudio.push(this.src); return Promise.resolve(); }; undefined;');
     await click('.dshwv-img', 'right');
     await until("document.activeElement === document.getElementById('chat-input') && !document.getElementById('chat-new').disabled", 'chat did not load after renderer restart');
     await js("document.getElementById('chat-input').value = 'long interrupted'; document.getElementById('chat-input').dispatchEvent(new Event('input')); document.getElementById('chat-send').click();");
@@ -272,6 +319,52 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     assert.equal(JSON.parse((await dispatcher.dispatch('/api/chat/history')).body).conversationId, firstConversation.conversationId);
     await js("document.getElementById('chat-show-conversations').click()");
     passed.push('conversation list creates independent sessions, restores drafts, resumes old history and deletes only the chosen session while preserving billing');
+    await js("document.getElementById('chat-input').value = '启动番茄钟'; document.getElementById('chat-input').dispatchEvent(new Event('input')); document.getElementById('chat-send').click();");
+    await until("document.getElementById('chat-output').textContent.includes('专注三十分钟') && document.getElementById('chat-stop').hidden", 'model tool call did not complete in chat');
+    await until("!document.getElementById('chat-timer').hidden && document.getElementById('chat-timer').textContent.includes('专注 1/2')", 'active Pomodoro badge did not appear');
+    await until("(() => { const badge = document.getElementById('chat-timer').getBoundingClientRect(); const composer = document.getElementById('chat-composer').getBoundingClientRect(); const reply = document.getElementById('chat-reply').getBoundingClientRect(); const overlaps = box => badge.left < box.right && badge.right > box.left && badge.top < box.bottom && badge.bottom > box.top; return badge.top >= 0 && badge.bottom <= innerHeight && !overlaps(composer) && !overlaps(reply); })()", 'Pomodoro badge was covered by chat surfaces');
+    const timerState = JSON.parse((await dispatcher.dispatch('/api/chat/activity')).body).pomodoro;
+    assert.equal(timerState.focusMinutes, 30); assert.equal(timerState.breakMinutes, 5); assert.equal(timerState.cycles, 2);
+    await capture('chat-pomodoro-active');
+    const timerViewport = window.getBounds();
+    setTestViewport({ ...timerViewport, width: 390, height: 844 });
+    await until('innerWidth === 390 && innerHeight === 844', 'timer viewport resize failed');
+    for (const edge of ['top', 'bottom']) {
+      await js(`window.__whaleRenderTest.place(150, ${edge === 'top' ? 0 : 600}, false)`);
+      await until("(() => { const badge = document.getElementById('chat-timer').getBoundingClientRect(); const composer = document.getElementById('chat-composer').getBoundingClientRect(); const reply = document.getElementById('chat-reply').getBoundingClientRect(); const overlaps = box => badge.left < box.right && badge.right > box.left && badge.top < box.bottom && badge.bottom > box.top; return badge.left >= 0 && badge.right <= innerWidth && badge.top >= 0 && badge.bottom <= innerHeight && !overlaps(composer) && !overlaps(reply); })()", 'timer badge overlapped chat at ' + edge + ' edge');
+      await capture('chat-pomodoro-390-' + edge);
+    }
+    setTestViewport(null);
+    await js('window.__whaleRenderTest.place(300, 300, false)');
+    await js("document.getElementById('chat-close').click(); window.__playedAudio = []");
+    clockOffset += 31 * 60000;
+    await until("!document.getElementById('chat-reply').hidden && document.getElementById('chat-reply').title === '开始休息'", 'focus end did not show an actionable reminder');
+    const beforeClick = JSON.parse((await dispatcher.dispatch('/api/chat/billing')).body).billing.recorded;
+    await delay(3300);
+    assert.equal((await js('window.__playedAudio')).filter(url => url.includes('release') && url.includes('fx1')).length, 1, 'reminder sound must play once per notice');
+    await capture('chat-pomodoro-break-reminder');
+    await click('#chat-output');
+    assert.equal(JSON.parse((await dispatcher.dispatch('/api/chat/activity')).body).pomodoro.phase, 'break');
+    assert.equal(await js("document.getElementById('chat-composer').hidden && document.getElementById('chat-reply').hidden"), true, 'click should advance without opening chat');
+    assert.equal(JSON.parse((await dispatcher.dispatch('/api/chat/billing')).body).billing.recorded, beforeClick, 'phase click must not make a model request');
+    clockOffset += 6 * 60000;
+    await until("!document.getElementById('chat-reply').hidden && document.getElementById('chat-reply').title === '开始下一轮专注'", 'break end did not show an actionable reminder');
+    await click('#chat-output');
+    const nextFocus = JSON.parse((await dispatcher.dispatch('/api/chat/activity')).body).pomodoro;
+    assert.equal(nextFocus.phase, 'focus'); assert.equal(nextFocus.cycle, 2);
+    assert.equal(await js("document.getElementById('chat-composer').hidden"), true);
+    passed.push('clicking a reminder starts break or next focus without a chat message; sound plays once and clicks do not incur API charges');
+    clockOffset = 0;
+    activateChatShortcut();
+    await until("!document.getElementById('chat-composer').hidden && !document.getElementById('chat-new').disabled", 'chat did not reopen after timer clicks');
+    await js("document.getElementById('chat-input').value = '启动番茄钟'; document.getElementById('chat-input').dispatchEvent(new Event('input')); document.getElementById('chat-send').click()");
+    await until("document.getElementById('chat-output').textContent.includes('专注三十分钟') && document.getElementById('chat-stop').hidden", 'timer reset for restart did not finish');
+    await js("document.getElementById('chat-open-settings').click()");
+    await until("document.getElementById('chat-settings').open && document.querySelector('[name=proactiveStart]').value === '09:00'", 'proactive settings did not load');
+    await js("document.querySelector('[name=proactiveEnabled]').checked = true; document.getElementById('chat-settings-form').requestSubmit()");
+    await until("!document.getElementById('chat-settings').open", 'proactive settings did not save');
+    assert.equal(JSON.parse((await dispatcher.dispatch('/api/chat/activity/settings')).body).settings.enabled, true);
+    passed.push('model tool call sets Pomodoro without a permission prompt; timer badge and proactive settings persist');
     await js("document.getElementById('chat-history').hidden = true");
     await js('window.__whaleRenderTest.place(300, 300, false)');
     await js("document.getElementById('chat-close').click()");
@@ -285,6 +378,30 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     dispatcher.whale.updateSubscriptionRateLimitContext({ observedAt: now, usesSubscription: true });
     await js('window.__whaleRenderTest.refresh(true)');
     await until("document.querySelector('.dshwv-root').title.includes('Codex 订阅额度')", 'subscription did not replace API display');
+    saveClaudeUsage(dataDir, { rate_limits: { five_hour: { used_percentage: 20, resets_at: Math.floor(now / 1000) + 3600 },
+      seven_day: { used_percentage: 65, resets_at: Math.floor(now / 1000) + 86400 } } }, now);
+    window.webContents.reload();
+    await until("!!window.__whaleRenderTest && document.querySelector('[data-source=claude]')?.getAttribute('aria-pressed') === 'true'", 'recent Claude status line snapshot did not select Claude on startup');
+    await js('window.__playedAudio = []; HTMLMediaElement.prototype.play = function () { window.__playedAudio.push(this.src); return Promise.resolve(); }; undefined;');
+    saveClaudeTurn(dataDir, { hook_event_name: 'Stop', session_id: 'fixture' }, now + 1000);
+    await js('window.__whaleRenderTest.poll()');
+    await until("document.querySelector('.dshwv-root').title.includes('Claude 订阅额度') && document.querySelector('[data-source=claude]').getAttribute('aria-pressed') === 'true'", 'Claude source did not become active');
+    await until("window.__whaleRenderTest.status().scene === 'cost' && !window.__whaleRenderTest.status().switching && Number(getComputedStyle(document.querySelector('.dshwv-pop-open .dshwv-bshape')).opacity) > 0.99 && Number(getComputedStyle(document.querySelector('.dshwv-pop-open .dshwv-text')).opacity) > 0.99 && [...document.querySelectorAll('.dshwv-pop-open .dshwv-frame')].some(el => el.innerText.includes('Claude 回复完成') && el.innerText.includes('5小时剩余80%') && Number(getComputedStyle(el).opacity) > 0.99)", 'Claude reply did not open a visible completion bubble');
+    assert.equal((await measureLayout('claude-completion')).fits, true, 'Claude completion must fit the visible bubble');
+    assert.equal(await js("window.__whaleRenderTest.status().scene === 'cost' && document.querySelector('.dshwv-pop').classList.contains('dshwv-pop-open')"), true,
+      'Claude completion closed before its screenshot finished');
+    await js('window.__whaleRenderTest.close()');
+    await click('.dshwv-img');
+    await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('Claude 订阅额度') && el.innerText.includes('5小时剩余80%') && el.innerText.includes('7天剩余35%'))", 'click after Claude reply did not show Claude quota');
+    assert.equal((await measureLayout('claude-quota')).fits, true, 'Claude quota rows must fit the visible bubble');
+    await js('window.__whaleRenderTest.close()');
+    saveClaudeUsage(dataDir, { rate_limits: {} }, now);
+    await js('window.__whaleRenderTest.refresh(true)');
+    await until("document.querySelector('.dshwv-root').title.includes('Claude 订阅额度 · 等待更新')", 'missing Claude quota should be unknown');
+    await js("document.querySelector('[data-source=codex]').click()");
+    await until("document.querySelector('.dshwv-root').title.includes('Codex 订阅额度') && document.querySelector('[data-source=codex]').getAttribute('aria-pressed') === 'true'", 'Codex source did not recover after Claude');
+    passed.push('Claude completion auto-selects its quota, opens a completion bubble, and click shows the latest Claude usage');
+    passed.push('Claude and Codex quota sources stay independent and missing Claude data is unknown');
     await click('.dshwv-img');
     await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('5小时剩余75%') && Number(getComputedStyle(el).opacity) > 0.99)", 'native subscription click did not become visible');
     await measureLayout('subscription-native-click');
@@ -334,6 +451,15 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await js('window.__whaleRenderTest.close()');
     passed.push('real usage requests switch subscription/API display and map a completion to a pending-cost bubble');
 
+    await js(`(${timerRow}).querySelector('input').click()`);
+    for (let i = 0; dispatcher.whale.readUsageSettings().pomodoroSound.on && i < 50; i++) await delay(100);
+    assert.equal(dispatcher.whale.readUsageSettings().pomodoroSound.on, false);
+    await js("window.__playedAudio = []; window.dispatchEvent(new Event('whale-pomodoro-reminder'))");
+    assert.deepEqual(await js('window.__playedAudio'), []);
+    assert.equal(dispatcher.whale.readUsageSettings().approvalSound.on, true);
+    assert.equal(dispatcher.whale.readUsageSettings().taskEnd.on, false);
+    passed.push('Pomodoro sound toggle persists independently from approval and task completion sounds');
+
     await approval();
     assert.ok((await js('window.__playedAudio')).some(url => url.includes('fx1') && url.includes('release')));
     await delay(13200);
@@ -369,15 +495,29 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await js(`(${row}).querySelector('input').click(); const select = (${row}).querySelector('select'); select.value = ${JSON.stringify('frag:' + id)}; select.dispatchEvent(new Event('change'));`);
     for (let i = 0; saved().sel !== 'frag:' + id && i < 50; i++) await delay(100);
     assert.deepEqual(saved(), { on: true, sel: 'frag:' + id });
+    assert.equal(await js(`(${timerRow}).querySelector('input').checked`), false, 'Pomodoro mute did not survive reload');
+    await js(`(() => { (${timerRow}).querySelector('input').click(); const select = (${timerRow}).querySelector('select'); select.value = ${JSON.stringify('frag:' + id)}; select.dispatchEvent(new Event('change')); })()`);
+    for (let i = 0; dispatcher.whale.readUsageSettings().pomodoroSound.sel !== 'frag:' + id && i < 50; i++) await delay(100);
+    assert.deepEqual(dispatcher.whale.readUsageSettings().pomodoroSound, { on: true, sel: 'frag:' + id });
     assert.equal(dispatcher.whale.readUsageSettings().taskEnd.on, false);
     const media = await dispatcher.dispatch('/dsh-whale/audio-fragment.wav?id=' + id);
     assert.equal(media.status, 200);
     assert.ok(media.body.length > 44);
     await js('window.__playedAudio = []; HTMLMediaElement.prototype.play = function () { window.__playedAudio.push(this.src); return Promise.resolve(); }; undefined;');
+    await js("window.dispatchEvent(new Event('whale-pomodoro-reminder'))");
+    assert.ok((await js('window.__playedAudio')).some(url => url.includes(id)));
+    passed.push('Pomodoro reminder plays imported custom audio with task completion sound disabled');
     await approval();
     assert.ok((await js('window.__playedAudio')).some(url => url.includes(id)));
     passed.push('imported WAV plays with completion sound disabled and persists for next startup');
     await capture('custom-approval');
+    await js('window.__whaleRenderTest.close(); window.__whaleRenderTest.place(600, 300, false)');
+    await click('.dshwv-menu-btn');
+    await until("document.querySelector('.dshwv-menu').classList.contains('dshwv-menu-open')", 'sound settings menu did not open');
+    await until("(() => { const badge = document.getElementById('chat-timer').getBoundingClientRect(); const menu = document.querySelector('.dshwv-menu-open')?.getBoundingClientRect(); return menu && (badge.right <= menu.left || badge.left >= menu.right || badge.bottom <= menu.top || badge.top >= menu.bottom); })()", 'timer badge covered the sound settings menu');
+    await capture('reminder-sound-settings');
+    assert.equal(await js(`(() => { const row = (${timerRow}); const label = row.querySelector('span').getBoundingClientRect(); const check = row.querySelector('input').getBoundingClientRect(); return label.right <= check.left && row.scrollWidth <= row.clientWidth; })()`), true, 'Pomodoro sound row overlaps or overflows');
+    await js("document.querySelector('.dshwv-menu-btn').click()");
   }
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(output, phase + '.json'), JSON.stringify({ version: '0.2.6', phase, passed, layouts, rendering: renderInfo(), rendererErrors: errors }, null, 2));

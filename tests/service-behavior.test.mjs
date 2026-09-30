@@ -64,13 +64,17 @@ test('interrupted turns recover tokens without replaying completion or duplicati
   assert.deepEqual(createService().prepareRecovery(), []);
 });
 
-test('approval sound settings persist independently from task completion sound', async t => {
+test('approval and Pomodoro sound settings persist independently from task completion sound', async t => {
   const { service, createService } = fixture(t);
   assert.deepEqual(service.readUsageSettings().approvalSound, { on: true, sel: 'preset:fx1:release' });
-  service.writeUsageSettings({ taskEnd: { on: false }, approvalSound: { on: false, sel: 'frag:custom' } });
+  assert.deepEqual(service.readUsageSettings().pomodoroSound, { on: true, sel: 'preset:fx1:release' });
+  service.writeUsageSettings({ taskEnd: { on: false }, approvalSound: { on: false, sel: 'frag:custom' }, pomodoroSound: { on: true, sel: 'frag:timer' } });
   const settings = createService().readUsageSettings();
   assert.equal(settings.taskEnd.on, false);
   assert.deepEqual(settings.approvalSound, { on: false, sel: 'frag:custom' });
+  assert.deepEqual(settings.pomodoroSound, { on: true, sel: 'frag:timer' });
+  service.writeUsageSettings({ pomodoroSound: { on: false } });
+  assert.deepEqual(createService().readUsageSettings().pomodoroSound, { on: false, sel: 'frag:timer' });
   assert.throws(() => service.writeUsageSettings({ budget: { amount: -1 } }), /非负/);
   assert.equal(createService().readUsageSettings().budget.amount, settings.budget.amount);
 });

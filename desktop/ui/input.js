@@ -6,7 +6,7 @@
   const failedRoleSources = new Set();
   let point = { x: -1, y: -1 }, heldPointer = null, releaseEpoch = 0, interactive = false, keyboardFocus = false, ready = false, lastStorage = '';
   const surfaces = 'dialog[open],.chat-composer,.chat-reply,.dshwv-menu,.dshwv-menu-btn,.dshwv-rolelist,.dshwv-audiolist,[class*="mask"],.dshwv-qedit,.dshwv-usagepanel,.dshwv-custmenu,.dshwv-custbtn,.dshwv-tplhelp,.dshwv-fxinfo,.dshwv-fxicon,#toast:not([hidden])';
-  const keyboardSurfaces = 'dialog[open],.chat-composer,.chat-reply,.dshwv-menu,.dshwv-rolelist,.dshwv-audiolist,[class*="mask"],.dshwv-qedit,.dshwv-usagepanel,.dshwv-custmenu';
+  const keyboardSurfaces = 'dialog[open],.chat-composer,.dshwv-menu,.dshwv-rolelist,.dshwv-audiolist,[class*="mask"],.dshwv-qedit,.dshwv-usagepanel,.dshwv-custmenu';
   function visible(el) { return el.checkVisibility({ opacityProperty: true, visibilityProperty: true }); }
   function contains(el, p) { const r = el.getBoundingClientRect(); return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom; }
   function menuCapturesOutsideClick() {
@@ -42,6 +42,7 @@
   document.addEventListener('pointerdown', e => {
     ++releaseEpoch;
     point = { x: e.clientX, y: e.clientY };
+    if (e.target.closest(keyboardSurfaces)) bridge.keyboardFocus(true);
     // The widget's earlier capture listener may already accept this press and
     // start the squish animation. Its pending pointer capture is authoritative:
     // testing the now-moving alpha again must not discard the accepted gesture.

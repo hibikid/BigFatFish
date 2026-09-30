@@ -7,11 +7,13 @@
   'use strict';
   function create({ fetchImpl, acceptsSubscription, shouldNotify, storage, now = Date.now, timeoutMs = 25000 } = {}) {
     let seq = 0, id = '', aligned = false, turnJob = null;
+    let claudeId = '', claudeAligned = false, claudeJob = null;
     const startedAt = now();
     try {
       const saved = Number(storage?.getItem('dshw-last-seq') || 0);
       if (Number.isFinite(saved) && saved >= 0) seq = saved;
       id = storage?.getItem('dshw-last-turn-id') || '';
+      claudeId = storage?.getItem('dshw-last-claude-turn-id') || '';
     } catch {}
     async function request(url, { signal, method = 'GET', body } = {}) {
       const response = await fetchImpl(url, { cache: 'no-store', signal, method,
@@ -52,8 +54,20 @@
       }).finally(() => { turnJob = null; });
       return turnJob;
     }
+    function pollClaudeTurn() {
+      if (claudeJob) return Promise.resolve({ record: null, fresh: false });
+      claudeJob = request('/api/claude/last-turn').then(record => {
+        if (!record?.ok || !record.available || !record.id) return { record: null, fresh: false };
+        const fresh = record.id !== claudeId && (claudeAligned || record.completedAt >= startedAt);
+        claudeAligned = true;
+        claudeId = record.id;
+        try { storage?.setItem('dshw-last-claude-turn-id', claudeId); } catch {}
+        return { record, fresh };
+      }).finally(() => { claudeJob = null; });
+      return claudeJob;
+    }
     const read = url => request(url);
-    const subscription = () => read('/api/subscription-rate-limits');
+    const subscription = (source = 'codex') => read(source === 'claude' ? '/api/claude/subscription' : '/api/subscription-rate-limits');
     const records = () => read('/dsh-whale/usage-records.json');
     const settings = () => read('/dsh-whale/usage-settings.json');
     function saveSettings(patch) {
@@ -62,7 +76,7 @@
         return result;
       });
     }
-    return Object.freeze({ overview, subscription, records, settings, saveSettings, pollTurn });
+    return Object.freeze({ overview, subscription, records, settings, saveSettings, pollTurn, pollClaudeTurn });
   }
   return Object.freeze({ create });
 });

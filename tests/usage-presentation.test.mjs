@@ -35,6 +35,17 @@ test('subscription snapshots become quota lines rather than money and an unavail
   }));
 });
 
+test('Claude can show one known subscription window while leaving the other unknown', () => {
+  const quota = { available: true, provider: 'Claude', observedAt: '2026-09-29T01:00:00Z',
+    fiveHour: { remainingPercent: 76.5, resetsAt: '2026-09-29T06:00:00Z' }, sevenDay: null };
+  const view = presentation.subscription(quota);
+  assert.equal(view.alt, 'Claude 订阅额度');
+  assert.match(view.title, /Claude 状态栏快照/);
+  assert.equal(presentation.quotaLines(quota).fiveHour, '5小时剩余77%');
+  assert.equal(presentation.quotaLines(quota).sevenDay, '7天剩余--');
+  assert.equal(presentation.subscription({ ...quota, fiveHour: null }), null);
+});
+
 test('display snapshots keep loading, pending and unknown amounts distinct from zero', () => {
   const money = value => '$' + value.toFixed(2);
   assert.equal(presentation.balanceBubble({ status: 'loading', balance: null }, { formatMoney: money }).amount, '…');

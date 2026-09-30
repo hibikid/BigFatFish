@@ -24,6 +24,14 @@ test('overview prefers subscription and manual API fallback uses the force-refre
   assert.deepEqual(requests[2], ['/dsh-whale/balance.json?refresh=1', 'no-store']);
 });
 
+test('Claude subscription uses an independent local route', async () => {
+  const requests = [];
+  const client = create({ fetchImpl: async url => { requests.push(url); return Response.json({ available: false }); } });
+  await client.subscription('claude');
+  await client.subscription();
+  assert.deepEqual(requests, ['/api/claude/subscription', '/api/subscription-rate-limits']);
+});
+
 test('a temporary quota read failure preserves an existing snapshot, while an unavailable one falls back', async () => {
   const previous = quota();
   let fail = true, balances = 0;
@@ -71,6 +79,23 @@ test('concurrent task polls share one read, persist the cursor, and never replay
   assert.equal(values.get('dshw-last-turn-id'), 'new');
   assert.equal((await client.pollTurn()).fresh, false);
   assert.equal((await create(options).pollTurn()).fresh, false);
+});
+
+test('Claude completion polls once, ignores old events and never replays after a restart', async () => {
+  const values = new Map(), storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
+  let record = { ok: true, available: true, provider: 'Claude', id: 'old', completedAt: 99 };
+  let reads = 0;
+  const options = { now: () => 100, storage, fetchImpl: async url => {
+    assert.equal(url, '/api/claude/last-turn'); reads++; return Response.json(record);
+  } };
+  const client = create(options);
+  assert.equal((await client.pollClaudeTurn()).fresh, false);
+  record = { ...record, id: 'new', completedAt: 101 };
+  const pair = await Promise.all([client.pollClaudeTurn(), client.pollClaudeTurn()]);
+  assert.equal(reads, 2);
+  assert.equal(pair.filter(result => result.fresh).length, 1);
+  assert.equal(values.get('dshw-last-claude-turn-id'), 'new');
+  assert.equal((await create(options).pollClaudeTurn()).fresh, false);
 });
 
 test('API fallback transitions before the request and cannot erase a newer polled subscription', async () => {

@@ -29,6 +29,7 @@ async function consume(response) {
   for await (const event of readEvents(response.body)) events.push(JSON.parse(event.data));
   return events;
 }
+const withoutTime = messages => messages.filter(message => !message.content?.startsWith('当前用户设备本地时间：'));
 
 test('chat settings keep secrets out of settings/history and require a new key when changing site', async t => {
   const { service, dataDir, vault } = fixture(t);
@@ -97,7 +98,7 @@ test('renderer client and dispatcher stream split UTF-8, persona, reply limit an
   assert.equal(requests[0].url, 'https://chat.example.test/v1/chat/completions');
   assert.equal(requests[0].redirect, 'error'); assert.equal(requests[0].payload.stream, true);
   assert.equal(requests[0].payload.max_tokens, 256);
-  assert.deepEqual(requests[1].payload.messages, [
+  assert.deepEqual(withoutTime(requests[1].payload.messages), [
     { role: 'system', content: settings.persona }, { role: 'user', content: 'Hello' },
     { role: 'assistant', content: '你好，鲸鱼\n第二行' }, { role: 'user', content: 'Again' }
   ]);
@@ -179,10 +180,10 @@ test('conversation list preserves separate contexts, resumes old chats and survi
   assert.equal(service.history().conversations.length, 2);
   assert.throws(() => service.start({ id: 'stale_message', text: 'Wrong topic', conversationId: firstId }), /已切换/);
   await consume(service.start({ id: 'second_message', text: 'Second topic', conversationId: secondId }));
-  assert.deepEqual(requests[1], [{ role: 'system', content: settings.persona }, { role: 'user', content: 'Second topic' }]);
+  assert.deepEqual(withoutTime(requests[1]), [{ role: 'system', content: settings.persona }, { role: 'user', content: 'Second topic' }]);
   service.changeConversation('select', firstId);
   await consume(service.start({ id: 'resumed_message', text: 'Continue first' }));
-  assert.deepEqual(requests[2], [{ role: 'system', content: settings.persona }, { role: 'user', content: 'First topic' },
+  assert.deepEqual(withoutTime(requests[2]), [{ role: 'system', content: settings.persona }, { role: 'user', content: 'First topic' },
     { role: 'assistant', content: 'reply' }, { role: 'user', content: 'Continue first' }]);
   const restarted = new ChatService({ dataDir, secretVault: vault }); t.after(() => restarted.close());
   assert.equal(restarted.history().conversationId, firstId);

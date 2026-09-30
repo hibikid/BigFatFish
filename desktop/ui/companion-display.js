@@ -1,10 +1,29 @@
-export function createCompanionDisplay({ pet, composer, reply, content }) {
-  let opened = false, scheduled = false, destroyed = false, followTail = true, dismissed = false, lastMoveBottom = null, followUntil = 0;
+export function createCompanionDisplay({ pet, composer, reply, content, timer }) {
+  let opened = false, notice = false, scheduled = false, destroyed = false, followTail = true, dismissed = false, lastMoveBottom = null, followUntil = 0;
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  function placeTimer(bounds, width, height) {
+    if (!timer || timer.hidden) return;
+    const w = timer.offsetWidth, h = timer.offsetHeight, center = bounds.left + bounds.width / 2;
+    const candidates = [
+      { left: bounds.right + 6, top: bounds.bottom - h - 2 },
+      { left: bounds.left - w - 6, top: bounds.bottom - h - 2 },
+      { left: center - w / 2, top: bounds.top - h - 6 },
+      { left: center - w / 2, top: bounds.bottom + 6 },
+    ];
+    const overlap = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    const occupied = [...[composer, reply].filter(el => !el.hidden), ...document.querySelectorAll('.dshwv-menu-open')].map(el => el.getBoundingClientRect());
+    const chosen = candidates.find(point => {
+      const box = { ...point, right: point.left + w, bottom: point.top + h };
+      return box.left >= 8 && box.top >= 8 && box.right <= width - 8 && box.bottom <= height - 8 && occupied.every(rect => !overlap(box, rect));
+    }) || candidates[2];
+    timer.style.left = clamp(chosen.left, 8, width - w - 8) + 'px';
+    timer.style.top = clamp(chosen.top, 8, height - h - 8) + 'px';
+  }
   function position() {
     scheduled = false;
-    if (!opened || destroyed) return;
+    if (destroyed) return;
     const bounds = pet.getBoundingClientRect(), width = window.innerWidth, height = window.innerHeight;
+    if (!opened && !notice) { placeTimer(bounds, width, height); return; }
     const bottomSpace = composer.offsetHeight + 12;
     if (bounds.bottom + bottomSpace > height - 8 && bounds.top > 8 && bounds.bottom !== lastMoveBottom) {
       lastMoveBottom = bounds.bottom;
@@ -31,6 +50,7 @@ export function createCompanionDisplay({ pet, composer, reply, content }) {
       reply.style.left = clamp(side, 8, width - reply.offsetWidth - 8) + 'px';
       reply.style.top = clamp(bounds.top, 8, height - reply.offsetHeight - 8) + 'px';
     }
+    placeTimer(bounds, width, height);
     if (followTail) content.scrollTop = content.scrollHeight;
     window.WhaleRendering.presentFor(120);
   }
@@ -39,7 +59,7 @@ export function createCompanionDisplay({ pet, composer, reply, content }) {
     const scrollTop = content.scrollTop;
     content.textContent = text;
     if (!followTail) content.scrollTop = scrollTop;
-    reply.hidden = !opened || dismissed || !text;
+    reply.hidden = !(opened || notice) || dismissed || !text;
     schedule();
   }
   content.addEventListener('scroll', () => { followTail = content.scrollHeight - content.scrollTop - content.clientHeight < 24; });
@@ -48,7 +68,7 @@ export function createCompanionDisplay({ pet, composer, reply, content }) {
   const root = pet.closest('.dshwv-root');
   const observer = new MutationObserver(() => { followUntil = performance.now() + 350; schedule(); });
   observer.observe(root.parentElement, { subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
-  const stopFollowing = window.WhaleRendering.onFrame(() => { if (opened && performance.now() < followUntil) schedule(); });
+  const stopFollowing = window.WhaleRendering.onFrame(() => { if ((opened || notice || timer && !timer.hidden) && performance.now() < followUntil) schedule(); });
   window.addEventListener('resize', schedule);
   const legacy = root.querySelector('.dshwv-pop');
   const priority = new MutationObserver(() => {
@@ -58,16 +78,17 @@ export function createCompanionDisplay({ pet, composer, reply, content }) {
   priority.observe(legacy, { attributes: true, attributeFilter: ['class'] });
   return Object.freeze({
     open() { opened = true; composer.hidden = false; reply.hidden = dismissed || !content.textContent; schedule(); },
-    close() { opened = false; composer.hidden = true; reply.hidden = true; },
-    hideReply() { dismissed = true; reply.hidden = true; },
+    close() { opened = false; notice = false; composer.hidden = true; reply.hidden = true; },
+    hideReply() { dismissed = true; notice = false; reply.hidden = true; },
+    showNotice(text) { notice = true; dismissed = false; followTail = true; replace(text); window.dispatchEvent(new Event('whale-companion-reply')); },
     show(text) {
-      dismissed = false;
+      notice = false; dismissed = false;
       followTail = true;
       replace(text);
       window.dispatchEvent(new Event('whale-companion-reply'));
     },
     update: replace,
-    append(text) { content.append(document.createTextNode(text)); reply.hidden = !opened || dismissed; schedule(); },
+    append(text) { content.append(document.createTextNode(text)); reply.hidden = !(opened || notice) || dismissed; schedule(); },
     layout: schedule,
     destroy() { destroyed = true; resize.disconnect(); observer.disconnect(); priority.disconnect(); stopFollowing(); window.removeEventListener('resize', schedule); },
   });

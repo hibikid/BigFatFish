@@ -49,9 +49,13 @@ app.on('gpu-info-update', () => {
 });
 function invalidate() { if (window && !window.isDestroyed()) { presents++; window.webContents.invalidate(); } }
 function setKeyboardFocus(editing) {
-  if (!window || window.isDestroyed() || keyboardFocus === editing) return;
+  if (!window || window.isDestroyed()) return;
   keyboardFocus = editing;
-  if (editing) window.focus();
+  if (editing) {
+    // A key window in an accessory app can accept ASCII without activating the native IME client.
+    if (isMac && !app.isActive()) app.focus({ steal: true });
+    if (!window.isFocused()) window.focus();
+  }
 }
 function sendCursor(force = false) {
   if (!window || window.isDestroyed() || !rendererReady || !window.isVisible()) return;
@@ -221,7 +225,9 @@ else {
     let testOptions = {};
     if (fixture) { const { makeFixture } = await import(pathToFileURL(path.join(root, 'tests', 'desktop-fixture.mjs'))); testOptions = await makeFixture(dataDir); }
     const secretVault = new KeychainVault({ dataDir, safeStorage });
-    dispatcher = createDispatcher({ dataDir, secretVault, fetchImpl: (url, options) => net.fetch(url, options), onStop: pauseAndQuit, onShow: show, statusInfo: () => ({ followCodex: !freeDesktop, freeDesktop, platform: process.platform, followMode: freeDesktop ? 'free-desktop' : (lastHost?.followMode || null), hostPid: freeDesktop ? null : (lastHost?.hostPid || null), visible: !!window?.isVisible(), nativeFollowing: freeDesktop ? false : !!lastHost?.nativeFollowing, startup, rendering: gpuStatus }), ...testOptions });
+    dispatcher = createDispatcher({ dataDir, secretVault, fetchImpl: (url, options) => net.fetch(url, options), onStop: pauseAndQuit, onShow: show,
+      onChatNotice: notice => { if (notice.kind === 'pomodoro') show(); },
+      statusInfo: () => ({ followCodex: !freeDesktop, freeDesktop, platform: process.platform, followMode: freeDesktop ? 'free-desktop' : (lastHost?.followMode || null), hostPid: freeDesktop ? null : (lastHost?.hostPid || null), visible: !!window?.isVisible(), nativeFollowing: freeDesktop ? false : !!lastHost?.nativeFollowing, startup, rendering: gpuStatus }), ...testOptions });
     markStartup('dispatcherReady');
     await importLegacyStorage();
     session.defaultSession.protocol.handle('whale', async request => {
