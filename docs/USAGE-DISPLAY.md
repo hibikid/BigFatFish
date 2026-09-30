@@ -10,26 +10,31 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `desktop/ui/usage-client.js` | 用量路由、请求与 JSON 解析、余额刷新超时、任务通知游标与持久化 |
+| `desktop/ui/usage-client.js` | 用量来源：显示哪个来源及切换规则、各来源的路由与请求、余额刷新超时、任务通知游标与持久化 |
 | `desktop/ui/usage-presentation.js` | 余额与订阅显示状态、标题、额度文字、费用气泡文字的转换 |
 | `desktop/ui/turn-notice.js` | 已有任务结果快照、通知是否有效及开关规则 |
-| `assets/whale-widget.js` | 装配模块，把显示数据应用到现有 DOM、气泡、音效与金额绑定 |
+| `assets/whale-widget.js` | 装配模块，把显示数据应用到现有 DOM、气泡、音效与金额绑定；不保存来源状态 |
 
 请求模块不访问 DOM、Electron 或全局存储。创建时注入 `fetchImpl`、存储和现有的订阅判定 / 通知判定函数。展示适配是纯函数，不发请求、不操作 DOM，不访问存储；金额格式化通过 `formatMoney` 注入，继续使用现有 `WhaleMoney` 换算与绑定。
 
 ## 请求接口
 
-`WhaleUsageClient.create({ fetchImpl, acceptsSubscription, shouldNotify, storage, now?, timeoutMs? })` 返回：
+`WhaleUsageClient.create({ fetchImpl, acceptsSubscription, shouldNotify, storage, now?, timeoutMs?, onSource? })` 返回：
 
-- `overview({ manual?, getSubscription?, onBalanceFallback? })`：先读取订阅快照。可用时返回 `kind: 'subscription'`；读取临时失败时调用 `getSubscription()`，已有可用快照则返回 `kind: 'retained-subscription'`；否则查询 API，返回 `kind: 'balance'`。结果数据位于 `data`。
-- `subscription()`：读取额度，用于原有 5 秒本地轮询。
+- `source()` / `select(source)`：当前显示的来源（`codex` 或 `claude`）；`select` 是菜单里的手动选择。
+- `overview({ manual?, getSubscription?, onBalanceFallback? })`：刷新当前来源。Codex 先读取订阅快照，可用时返回 `kind: 'subscription'`；读取临时失败时调用 `getSubscription()`，已有可用快照则返回 `kind: 'retained-subscription'`；否则查询 API，返回 `kind: 'balance'`。Claude 只读取自己的额度，返回 `subscription` 或 `missing`，从不回退到 API 余额。
+- `pollQuota()`：原有 5 秒本地轮询，只读取当前来源的额度，返回 `subscription` 或 `missing`。
+- `pollTurns({ codex, claude })`：读取两个来源的完成事件，每条新完成只交给对应来源的回调一次。并发读取期间后来的调用不消费通知；已读结果及启动前历史结果不重复提示。
 - `records()`：读取用量记录。
 - `settings()` / `saveSettings(patch)`：读取及保存用量、音效设置；保存失败拒绝 Promise。
-- `pollTurn()`：读取任务结果，返回 `{ record, fresh }`。并发读取期间后来的调用不消费通知；已读结果及启动前历史结果不重复提示。
 
-余额刷新的一轮订阅 / API 请求共用原有 25 秒超时。API 请求发出前调用 `onBalanceFallback()`，由界面清除旧订阅模式。读取结束后不再清除订阅，避免覆盖期间独立轮询收到的新快照。订阅快照读取临时失败时检查最新显示状态，保留已有模式。
+所有读取结果都带 `source`。读取期间来源已切换时结果为 `null`，失败也不再抛出，界面无须自己比对来源；`onBalanceFallback()` 同样只在来源未变时调用。
 
-通知继续使用 `dshw-last-seq` 与 `dshw-last-turn-id` 存储键。游标读取及写入失败不影响当前进程的通知去重。现有 URL、手动 `?refresh=1` 参数及 `no-store` 语义保持不变。
+**来源选择。** 显示最近有活动的来源：Codex 或 Claude 的完成事件都算活动；启动时 Claude 额度快照的采样时间也算一次 Claude 活动。菜单手动选择会一直保持（重载后也保持），直到出现比选择时间更晚的活动。来源变化时调用 `onSource(source)`，界面清空旧的显示数据并刷新。
+
+余额刷新的一轮订阅 / API 请求共用原有 25 秒超时，Claude 来源的刷新也受同一超时约束。API 请求发出前调用 `onBalanceFallback()`，由界面清除旧订阅模式。读取结束后不再清除订阅，避免覆盖期间独立轮询收到的新快照。订阅快照读取临时失败时检查最新显示状态，保留已有模式。
+
+存储键保持不变：`dshw-display-source`、`dshw-display-source-manual-at`、`dshw-last-seq`、`dshw-last-turn-id`、`dshw-last-claude-turn-id`。游标读取及写入失败不影响当前进程的通知去重。现有 URL、手动 `?refresh=1` 参数及 `no-store` 语义保持不变。
 
 ## 展示接口
 

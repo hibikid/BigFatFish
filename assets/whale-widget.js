@@ -22,8 +22,10 @@
       shouldNotify: WhaleTurnNotice.shouldNotify,
       storage: {
         getItem: function (key) { return localStorage.getItem(key); },
-        setItem: function (key, value) { localStorage.setItem(key, value); }
-      }
+        setItem: function (key, value) { localStorage.setItem(key, value); },
+        removeItem: function (key) { localStorage.removeItem(key); }
+      },
+      onSource: function (source) { showUsageSource(source); }
     });
     var SIZE_URL = '/dsh-whale/size.json';
     var IMG_URL = '/dsh-whale/image.png?v=2';
@@ -820,7 +822,7 @@
       var button = document.createElement('button');
       button.type = 'button'; button.textContent = entry[1];
       button.dataset.source = entry[0];
-      button.addEventListener('click', function (event) { event.stopPropagation(); setDisplaySource(entry[0], true); });
+      button.addEventListener('click', function (event) { event.stopPropagation(); usageClient.select(entry[0]); });
       sourceButtons[entry[0]] = button;
       sourceSwitch.appendChild(button);
     });
@@ -7971,10 +7973,8 @@
       message: '',
       flip: false
     };
-    var displaySource = 'codex';
-    try { if (localStorage.getItem('dshw-display-source') === 'claude') displaySource = 'claude'; } catch (err) {}
     function syncSourceButtons() {
-      Object.keys(sourceButtons).forEach(function (source) { sourceButtons[source].setAttribute('aria-pressed', String(displaySource === source)); });
+      Object.keys(sourceButtons).forEach(function (source) { sourceButtons[source].setAttribute('aria-pressed', String(usageClient.source() === source)); });
     }
     syncSourceButtons();
     var SNAP_KEY = 'dshw-snap';
@@ -8450,7 +8450,7 @@
       if (bubbleScene && bubbleScene.ttlMs > 0) bubbleTtlTimer = setTimeout(bubbleAutoClose, bubbleScene.ttlMs);
     }
     function bubbleRenderDefault(firstSubscriptionQuota) {
-      if (displaySource === 'claude' && firstSubscriptionQuota && hasSubscriptionQuota()) {
+      if (usageClient.source() === 'claude' && firstSubscriptionQuota && hasSubscriptionQuota()) {
         bubbleRenderSubscriptionNotice(state.subscription, 'Claude 订阅额度');
       } else restoreBubbleLines(firstSubscriptionQuota);
     }
@@ -8590,7 +8590,7 @@
         hideBubble();
         return;
       }
-      if (displaySource === 'claude' && firstSubscriptionQuota) {
+      if (usageClient.source() === 'claude' && firstSubscriptionQuota) {
         sceneOpen('normal', function () {
           bubbleRenderDefault(true);
         }, BUBBLE_MS, { firstSubscriptionQuota: true });
@@ -8619,7 +8619,7 @@
       return WhaleUsagePresentation.hasSubscription(snapshot || state.subscription);
     }
     function bubbleLabelText(snapshot) {
-      return displaySource === 'claude' ? 'Claude 订阅额度' : '当前 API 余额';
+      return usageClient.source() === 'claude' ? 'Claude 订阅额度' : '当前 API 余额';
     }
     function bubbleContentTokenMap(m, snapshot) {
       m = m || ({});
@@ -9310,8 +9310,6 @@
       }, bubbleScene.ttlMs || BUBBLE_MS, { firstSubscriptionQuota: firstSubscriptionQuota });
     }
     function applySubscriptionQuota(subscription) {
-      if (displaySource === 'claude' && subscription?.provider !== 'Claude') return false;
-      if (displaySource === 'codex' && subscription?.provider === 'Claude') return false;
       var view = WhaleUsagePresentation.subscription(subscription);
       if (!view) return false;
       var changed = WhaleUsagePresentation.subscriptionFingerprint(state.subscription) !== WhaleUsagePresentation.subscriptionFingerprint(subscription);
@@ -9324,21 +9322,15 @@
       }
       return true;
     }
-    var subscriptionPolling = false;
     function refreshSubscriptionQuota() {
-      if (subscriptionPolling) return;
-      var source = displaySource;
-      subscriptionPolling = true;
-      usageClient.subscription(source).then(function (subscription) {
-        if (source !== displaySource) return;
-        if (applySubscriptionQuota(subscription)) return;
+      usageClient.pollQuota().then(function (result) {
+        if (!result) return;
+        if (result.kind === 'subscription' && applySubscriptionQuota(result.data)) return;
         if (state.subscription !== null) {
           state.subscription = null;
           refresh(false);
         }
-      }).catch(function () {}).finally(function () {
-        subscriptionPolling = false;
-      });
+      }).catch(function () {});
     }
     function express() {
       positioner.style.transform = 'translate3d(' + state.left + 'px,' + state.top + 'px,0)';
@@ -9439,49 +9431,26 @@
         cy: cy
       };
     }
-    var lastActivityAt = 0;
-    try {
-      var manuallySelectedAt = Number(localStorage.getItem('dshw-display-source-manual-at') || 0);
-      if (Number.isFinite(manuallySelectedAt) && manuallySelectedAt > 0) lastActivityAt = manuallySelectedAt;
-    } catch (err) {}
-    function setDisplaySource(source, manual) {
-      if (source !== 'codex' && source !== 'claude') return;
-      if (manual) {
-        lastActivityAt = Date.now();
-        try { localStorage.setItem('dshw-display-source-manual-at', String(lastActivityAt)); } catch (err) {}
-      }
-      if (source === displaySource) return;
-      displaySource = source;
+    function showUsageSource(source) {
       syncSourceButtons();
-      try { localStorage.setItem('dshw-display-source', source); } catch (err) {}
       state.subscription = null; state.balance = null; state.balanceText = ''; state.todayUsage = null;
       state.status = 'loading'; state.message = '';
       root.title = source === 'claude' ? 'Claude 订阅额度 · 等待更新' : 'Codex 用量';
       refreshOpenNormalBubble();
       if (busy) refreshQueued = true; else refresh(false);
     }
-    function considerActivity(source, timestamp) {
-      var at = typeof timestamp === 'number' ? timestamp : Date.parse(timestamp);
-      if (!Number.isFinite(at) || at <= lastActivityAt) return;
-      lastActivityAt = at;
-      try { localStorage.removeItem('dshw-display-source-manual-at'); } catch (err) {}
-      if (source !== displaySource) setDisplaySource(source, false);
-    }
     var refreshQueued = false;
     function refresh(manual) {
       if (busy) { refreshQueued = true; return; }
       busy = true;
-      var source = displaySource;
       if (manual || !hasBalanceDisplay(state) && !hasSubscriptionQuota()) state.status = 'loading';
-      var request = source === 'claude' ? usageClient.subscription('claude').then(function (data) { return { kind: 'claude', data: data }; }) : usageClient.overview({
+      usageClient.overview({
         manual: !!manual,
         getSubscription: function () { return state.subscription; },
-        onBalanceFallback: function () { if (displaySource === source) state.subscription = null; }
-      });
-      request.then(function (result) {
-        if (source !== displaySource) return;
-        if (result.kind === 'claude') {
-          if (applySubscriptionQuota(result.data)) return;
+        onBalanceFallback: function () { state.subscription = null; }
+      }).then(function (result) {
+        if (!result) return;
+        if (result.kind === 'missing') {
           state.subscription = null; state.balance = null; state.balanceText = ''; state.todayUsage = null;
           state.status = 'error'; state.message = '等待 Claude 回复后更新';
           root.title = 'Claude 订阅额度 · 等待更新'; img.alt = 'Claude 订阅额度待更新';
@@ -9512,7 +9481,6 @@
           }));
         }
       }).catch(function () {
-        if (source !== displaySource) return;
         if (!hasSubscriptionQuota()) {
           Object.assign(state, WhaleUsagePresentation.balance(null).state);
         }
@@ -11842,27 +11810,19 @@
       showUsageSub();
     });
     function pollLastTurn() {
-      try {
-        usageClient.pollTurn().then(function (result) {
-          if (result.record) considerActivity('codex', result.record.notificationAt || result.record.ts);
-          if (!result.fresh) return;
-          var notice = WhaleTurnNotice.snapshot(result.record, state.currency);
+      return usageClient.pollTurns({
+        codex: function (record) {
+          var notice = WhaleTurnNotice.snapshot(record, state.currency);
           if (notice.completionKind === 'success') playTaskEndSound();
           showCostBubble(notice.amount, notice);
-        }).catch(function () {});
-        usageClient.pollClaudeTurn().then(function (result) {
-          if (!result.record) return;
-          considerActivity('claude', result.record.completedAt);
-          if (!result.fresh) return;
+        },
+        claude: function (record) {
           playTaskEndSound();
-          showClaudeTurnBubble(result.record.subscription);
-        }).catch(function () {});
-      } catch (err) {}
+          showClaudeTurnBubble(record.subscription);
+        }
+      });
     }
     pollLastTurn();
-    usageClient.subscription('claude').then(function (subscription) {
-      if (WhaleUsagePresentation.hasSubscription(subscription)) considerActivity('claude', subscription.observedAt);
-    }).catch(function () {});
     setInterval(pollLastTurn, 1000);
     window.addEventListener('whale-approval-request', showApprovalReminder);
     window.addEventListener('whale-pomodoro-reminder', playPomodoroSound);
