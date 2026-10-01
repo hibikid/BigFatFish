@@ -1,6 +1,7 @@
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { readJson, writeJson } from '../paths.mjs';
-import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro } from './pomodoro.mjs';
+import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro, pomodoroInProgress, reminderCanAdvance } from './pomodoro.mjs';
 
 const DEFAULTS = { enabled: false, start: '09:00', end: '21:00', minMinutes: 45, maxMinutes: 90, dailyLimit: 3 };
 const FALLBACK = { completed: '这轮专注完成了，辛苦啦。', await_break: '专注时间到了，准备休息一下吧。', await_focus: '休息时间到了，准备开始下一轮专注吧。' };
@@ -75,7 +76,7 @@ export class ChatActivity {
     return item;
   }
   // Replaces the plan only once it is saved, so a failed save keeps the previous plan.
-  commit(state) {
+  replacePlan(state) {
     const previous = this.pomodoro;
     this.pomodoro = state;
     try { this.persist(); }
@@ -84,13 +85,13 @@ export class ChatActivity {
   // A reminder click stays valid after the notice is acknowledged, but only for its own transition.
   advance(input) {
     const next = advancePomodoro(this.pomodoro, input, this.now());
-    if (next) this.commit(next);
+    if (next) this.replacePlan(next);
     return { ok: true, advanced: !!next, pomodoro: this.snapshot().pomodoro };
   }
   tool(call, conversationId) {
-    const result = applyPomodoroCall(this.pomodoro, call, { now: this.now(), conversationId });
+    const result = applyPomodoroCall(this.pomodoro, call, { now: this.now(), conversationId, newId: randomUUID });
     if (!result.ok) return result;
-    if (result.state !== this.pomodoro) this.commit(result.state);
+    if (result.state !== this.pomodoro) this.replacePlan(result.state);
     return { ok: true, pomodoro: this.snapshot().pomodoro };
   }
   async tick() {
@@ -98,20 +99,20 @@ export class ChatActivity {
     this.busy = true;
     const jobs = [];
     try {
-      const now = this.now(), expired = expirePomodoro(this.pomodoro, now);
+      const now = this.now(), expired = expirePomodoro(this.pomodoro, now, randomUUID);
       if (expired) {
-        try { this.commit(expired.state); } catch { return; }
+        try { this.replacePlan(expired.state); } catch { return; }
         const { state, reminder } = expired, fallback = FALLBACK[reminder.phase];
         jobs.push((async () => {
           const generated = await this.onReminder({ ...state, fallback }).catch(() => null);
           if (this.closed || !reminderApplies(this.pomodoro, reminder)) return;
           const reply = settle(generated);
-          this.notice('pomodoro', reply?.text || fallback, reply?.conversationId || state.conversationId, reminder.phase === 'completed' ? null : reminder);
+          this.notice('pomodoro', reply?.text || fallback, reply?.conversationId || state.conversationId, reminderCanAdvance(reminder) ? reminder : null);
         })());
       }
       if (now - this.lastProactiveCheck >= 30000) {
         this.lastProactiveCheck = now;
-        if (this.config.enabled && this.inWindow(now) && ['idle', 'completed'].includes(this.pomodoro.phase) && this.canProactive() && !this.proactiveJob &&
+        if (this.config.enabled && this.inWindow(now) && !pomodoroInProgress(this.pomodoro) && this.canProactive() && !this.proactiveJob &&
           !(this.presence.busy && now - this.presence.at < 10000)) {
           const day = new Date(now).toLocaleDateString('en-CA');
           if (this.day !== day) { this.day = day; this.dailyCount = 0; }
@@ -121,7 +122,7 @@ export class ChatActivity {
             jobs.push((async () => {
               try {
                 const generated = await this.onProactive().catch(() => null);
-                const reply = !this.closed && ['idle', 'completed'].includes(this.pomodoro.phase) ? settle(generated) : null;
+                const reply = !this.closed && !pomodoroInProgress(this.pomodoro) ? settle(generated) : null;
                 if (reply) this.notice('proactive', reply.text, reply.conversationId);
                 else { this.dailyCount--; this.persist(); }
               } finally { this.proactiveJob = false; }

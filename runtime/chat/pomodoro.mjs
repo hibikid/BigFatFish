@@ -1,7 +1,5 @@
-import { randomUUID } from 'node:crypto';
-
 // The Pomodoro plan as plain values: every rule about phases, limits and
-// reminder identity lives here. Callers own persistence, clocks and notices.
+// reminder identity lives here. Callers own persistence, clocks, new ids and notices.
 // Phases: focus → await_break → break → await_focus → focus … → completed;
 // focus and break may be paused. Waiting phases never expire on their own.
 
@@ -18,9 +16,16 @@ const REMINDER_KEYS = ['planId', 'reminderId', 'phase', 'cycle'];
 const refuse = error => ({ ok: false, error });
 const own = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
 const between = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
+const ADVANCING = ['await_break', 'await_focus'];
+
+// Whether a plan is under way; proactive chat waits until it completes or stops.
+export const pomodoroInProgress = state => !['idle', 'completed'].includes(state.phase);
+// Whether clicking the reminder starts the next phase; the completion reminder has none.
+export const reminderCanAdvance = reminder => ADVANCING.includes(reminder?.phase);
 
 // Applies one preauthorized tool call. Refusals are returned to the model; they never throw.
-export function applyPomodoroCall(state, call, { now, conversationId = null }) {
+// A new plan takes its id from newId().
+export function applyPomodoroCall(state, call, { now, conversationId = null, newId }) {
   if (!call || typeof call !== 'object' || !POMODORO_TOOLS.some(tool => tool.function.name === call.name) || typeof call.arguments !== 'string' || call.arguments.length > 4096) return refuse('此操作不在预授权范围内');
   let args;
   try { args = JSON.parse(call.arguments); } catch { return refuse('操作参数格式无效'); }
@@ -29,7 +34,7 @@ export function applyPomodoroCall(state, call, { now, conversationId = null }) {
     const { focusMinutes, breakMinutes, cycles } = args || {};
     if (!own(args, ['focusMinutes', 'breakMinutes', 'cycles']) || !between(focusMinutes, 1, 240) || !between(breakMinutes, 1, 120) || !between(cycles, 1, 12) ||
       focusMinutes * cycles + breakMinutes * (cycles - 1) > 24 * 60) return refuse('番茄钟数值超出预授权范围');
-    return { ok: true, state: { phase: 'focus', planId: randomUUID(), focusMinutes, breakMinutes, cycles, cycle: 1, dueAt: now + focusMinutes * 60000, conversationId } };
+    return { ok: true, state: { phase: 'focus', planId: newId(), focusMinutes, breakMinutes, cycles, cycle: 1, dueAt: now + focusMinutes * 60000, conversationId } };
   }
   if (!own(args, ['action', 'minutes']) || !['pause', 'resume', 'start_break', 'start_focus', 'extend_focus', 'stop'].includes(args.action)) return refuse('此操作不在预授权范围内');
   const { action, minutes } = args, { phase } = state;
@@ -38,16 +43,16 @@ export function applyPomodoroCall(state, call, { now, conversationId = null }) {
   if (action === 'start_break' && ['focus', 'await_break'].includes(phase) && state.cycle < state.cycles) return { ok: true, state: { ...state, phase: 'break', dueAt: now + state.breakMinutes * 60000 } };
   if (action === 'start_focus' && ['break', 'await_focus'].includes(phase) && state.cycle < state.cycles) return { ok: true, state: { ...state, phase: 'focus', cycle: state.cycle + 1, dueAt: now + state.focusMinutes * 60000 } };
   if (action === 'extend_focus' && ['focus', 'await_break'].includes(phase) && between(minutes, 1, 60)) return { ok: true, state: { ...state, phase: 'focus', dueAt: Math.max(now, state.dueAt || now) + minutes * 60000 } };
-  if (action === 'stop' && !['idle', 'completed'].includes(phase)) return { ok: true, state: IDLE };
+  if (action === 'stop' && pomodoroInProgress(state)) return { ok: true, state: IDLE };
   return refuse('当前阶段不能执行此操作');
 }
 
 // When focus or break has run out: the waiting state, and the reminder that may advance it.
-// Each expiry issues a new reminder identity, so reminders for earlier phases stop applying.
-export function expirePomodoro(state, now) {
+// Each expiry takes a new reminder identity from newId(), so reminders for earlier phases stop applying.
+export function expirePomodoro(state, now, newId) {
   if (!['focus', 'break'].includes(state.phase) || now < state.dueAt) return null;
   const phase = state.phase === 'break' ? 'await_focus' : state.cycle === state.cycles ? 'completed' : 'await_break';
-  const next = { ...state, phase, dueAt: null, reminderId: randomUUID() };
+  const next = { ...state, phase, dueAt: null, reminderId: newId() };
   return { state: next, reminder: Object.fromEntries(REMINDER_KEYS.map(key => [key, next[key]])) };
 }
 
@@ -58,7 +63,7 @@ export function reminderApplies(state, reminder) {
 
 // A reminder click starts the phase it announced, once; anything else is ignored.
 export function advancePomodoro(state, reminder, now) {
-  if (!['await_break', 'await_focus'].includes(state.phase) || !reminderApplies(state, reminder)) return null;
+  if (!ADVANCING.includes(state.phase) || !reminderApplies(state, reminder)) return null;
   const result = applyPomodoroCall(state, { name: 'pomodoro_control', arguments: JSON.stringify({ action: state.phase === 'await_break' ? 'start_break' : 'start_focus' }) }, { now });
   return result.ok ? result.state : null;
 }

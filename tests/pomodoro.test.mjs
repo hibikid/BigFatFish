@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro } from '../runtime/chat/pomodoro.mjs';
+import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro, pomodoroInProgress, reminderCanAdvance } from '../runtime/chat/pomodoro.mjs';
 
 const MINUTE = 60000, now = Date.UTC(2026, 8, 30, 2, 0);
 const call = (name, args = {}) => ({ name, arguments: JSON.stringify(args) });
-const set = (focusMinutes, breakMinutes, cycles, at = now) => applyPomodoroCall(IDLE, call('pomodoro_set', { focusMinutes, breakMinutes, cycles }), { now: at, conversationId: 'chat_1' });
-const control = (state, action, at = now, extra = {}) => applyPomodoroCall(state, call('pomodoro_control', { action, ...extra }), { now: at, conversationId: 'chat_1' });
+let issued = 0;
+const newId = () => 'id-' + ++issued;
+const expire = (state, at) => expirePomodoro(state, at, newId);
+const set = (focusMinutes, breakMinutes, cycles, at = now) => applyPomodoroCall(IDLE, call('pomodoro_set', { focusMinutes, breakMinutes, cycles }), { now: at, conversationId: 'chat_1', newId });
+const control = (state, action, at = now, extra = {}) => applyPomodoroCall(state, call('pomodoro_control', { action, ...extra }), { now: at, conversationId: 'chat_1', newId });
 
 test('a plan starts focusing immediately and only within the preauthorized bounds', () => {
   const started = set(25, 5, 2);
@@ -44,11 +47,11 @@ test('controls follow the phase table: pause, resume, extend, start break or foc
 
 test('a finished phase waits for the user with a reminder that can advance only its own transition', () => {
   const focus = set(1, 1, 2).state;
-  assert.equal(expirePomodoro(focus, now + MINUTE - 1), null);
-  const { state: waiting, reminder } = expirePomodoro(focus, now + MINUTE);
+  assert.equal(expire(focus, now + MINUTE - 1), null);
+  const { state: waiting, reminder } = expire(focus, now + MINUTE);
   assert.equal(waiting.phase, 'await_break'); assert.equal(waiting.dueAt, null);
   assert.deepEqual(reminder, { planId: focus.planId, reminderId: waiting.reminderId, phase: 'await_break', cycle: 1 });
-  assert.equal(expirePomodoro(waiting, now + 10 * MINUTE), null, 'a waiting phase never expires on its own');
+  assert.equal(expire(waiting, now + 10 * MINUTE), null, 'a waiting phase never expires on its own');
   assert.equal(reminderApplies(waiting, reminder), true);
 
   const onBreak = advancePomodoro(waiting, reminder, now + 2 * MINUTE);
@@ -56,23 +59,30 @@ test('a finished phase waits for the user with a reminder that can advance only 
   assert.equal(advancePomodoro(onBreak, reminder, now), null, 'a second click does nothing');
 
   const extended = control(waiting, 'extend_focus', now + MINUTE, { minutes: 1 }).state;
-  const { state: again, reminder: later } = expirePomodoro(extended, now + 2 * MINUTE);
+  const { state: again, reminder: later } = expire(extended, now + 2 * MINUTE);
   assert.equal(advancePomodoro(again, reminder, now), null, 'the reminder from before the extension has expired');
   for (const forged of [{ ...later, cycle: 2 }, { ...later, action: 'stop' }, { ...later, reminderId: '' }, null, 'later']) {
     assert.equal(advancePomodoro(again, forged, now), null);
   }
-  const replaced = expirePomodoro(set(1, 1, 2, now + 2 * MINUTE).state, now + 3 * MINUTE).state;
+  const replaced = expire(set(1, 1, 2, now + 2 * MINUTE).state, now + 3 * MINUTE).state;
   assert.equal(advancePomodoro(replaced, later, now), null, 'a replaced plan ignores the old reminder');
   assert.equal(reminderApplies(replaced, later), false);
 
-  const breakOver = expirePomodoro(onBreak, now + 3 * MINUTE), repeated = expirePomodoro(onBreak, now + 3 * MINUTE);
-  assert.equal(advancePomodoro(breakOver.state, repeated.reminder, now), null, 'each expiry issues a new reminder identity');
+  const breakOver = expire(onBreak, now + 3 * MINUTE), repeated = expire(onBreak, now + 3 * MINUTE);
+  assert.equal(advancePomodoro(breakOver.state, repeated.reminder, now), null, 'a reminder applies only to the expiry that issued it');
+  assert.deepEqual(expirePomodoro(onBreak, now + 3 * MINUTE, () => 'same'), expirePomodoro(onBreak, now + 3 * MINUTE, () => 'same'), 'the same values give the same result');
   assert.equal(breakOver.state.phase, 'await_focus');
   const lastFocus = advancePomodoro(breakOver.state, breakOver.reminder, now + 4 * MINUTE);
   assert.equal(lastFocus.cycle, 2);
-  const done = expirePomodoro(lastFocus, now + 5 * MINUTE);
+  const done = expire(lastFocus, now + 5 * MINUTE);
   assert.equal(done.state.phase, 'completed'); assert.equal(done.reminder.phase, 'completed');
   assert.equal(advancePomodoro(done.state, done.reminder, now), null, 'completion has no next phase');
+  assert.deepEqual([reminder, breakOver.reminder, done.reminder].map(reminderCanAdvance), [true, true, false]);
+});
+
+test('a plan is in progress from its start until it completes or stops', () => {
+  const focus = set(1, 1, 1).state, done = expire(focus, now + MINUTE).state;
+  assert.deepEqual([IDLE, focus, control(focus, 'pause').state, done, control(focus, 'stop').state].map(pomodoroInProgress), [false, true, true, false, false]);
 });
 
 test('the view reports the remaining time from the runtime clock', () => {
