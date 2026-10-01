@@ -1,4 +1,4 @@
-import { readEvents } from '../../desktop/ui/chat-stream.js';
+import { readEvents } from '../../lib/event-stream.js';
 
 export function completionUrl(value) {
   let url;

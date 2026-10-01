@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { ChatActivity } from '../runtime/chat/activity.mjs';
 import { ChatService } from '../runtime/chat/service.mjs';
-import { readEvents } from '../desktop/ui/chat-stream.js';
+import { readEvents } from '../lib/event-stream.js';
 
 const tool = (name, args = {}) => ({ name, arguments: JSON.stringify(args) });
 const sse = events => new Response(events.map(value => 'data: ' + JSON.stringify(value) + '\n\n').join('') + 'data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });

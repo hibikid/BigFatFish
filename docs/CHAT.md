@@ -25,7 +25,7 @@
 | `desktop/ui/chat.js` | 输入、会话设置、记录、生成与停止状态 |
 | `desktop/ui/chat-billing.js` | 发送按钮旁的消费、余额、刷新与错误状态 |
 | `desktop/ui/companion-display.js` | 在角色周围定位输入窗口与回复气泡，随内容增长并限制在视口内 |
-| `desktop/ui/chat-stream.js` | 前后台共用的 SSE / UTF-8 流读取 |
+| `lib/event-stream.js` | 前后台共用的 SSE / UTF-8 流读取；页面经 `/lib/event-stream.js` 加载 |
 
 `companion-display` 通过传入的 DOM 和 `open / close / show / update / append / hideReply` 工作，不读取用量、账本、密钥或模型配置。`update` 用于后台记录恢复，保留用户收起气泡和滚动的位置。与已有宠物代码只通过打开、位移和回复显示事件装配。已有审批气泡可以覆盖会话回复，结束后会话回复恢复，生成过程继续。
 

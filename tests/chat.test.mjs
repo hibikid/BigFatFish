@@ -7,7 +7,7 @@ import { ChatService } from '../runtime/chat/service.mjs';
 import { completionUrl } from '../runtime/chat/provider.mjs';
 import { createDispatcher } from '../runtime/dispatcher.mjs';
 import { createChatClient } from '../desktop/ui/chat-client.js';
-import { readEvents } from '../desktop/ui/chat-stream.js';
+import { readEvents } from '../lib/event-stream.js';
 
 const settings = { baseUrl: 'https://chat.example.test/v1', model: 'dsv4.1flash', persona: 'You are a friendly whale.', maxTokens: 256, apiKey: 'synthetic-chat-key' };
 function fixture(t, options = {}) {

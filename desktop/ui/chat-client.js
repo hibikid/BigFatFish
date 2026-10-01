@@ -1,4 +1,4 @@
-import { readEvents } from './chat-stream.js';
+import { readEvents } from '../../lib/event-stream.js';
 
 export function createChatClient(fetchImpl = window.fetch.bind(window)) {
   async function request(route, method = 'GET', body) {

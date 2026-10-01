@@ -112,7 +112,7 @@ desktop/macos/              macOS LaunchAgent 监督器（保留旧版窗口探�
 runtime/                    余额与用量服务：配置解析、provider、账本、汇率、会话监视、MCP、IPC
 runtime/chat/               独立角色会话、历史迁移、DeepSeek 请求与计费
 runtime/chat/activity.mjs   主动闲聊调度、番茄钟状态与工具白名单
-lib/                        素材校验、资源库、widget 宿主
+lib/                        素材校验、资源库、widget 宿主，以及前后台共用的流式事件读取
 scripts/                    安装/启动/停止/卸载/回滚与启动器编译
 tests/                      关键行为测试与隔离桌面验证夹具
 skills/                     Codex 技能说明（会话内调用 whale_* 工具）
