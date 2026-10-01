@@ -40,14 +40,19 @@ app.on('gpu-info-update', () => {
   fs.promises.writeFile(path.join(dataDir, 'render-status.json'), JSON.stringify(gpuStatus, null, 2)).catch(() => {});
 });
 function invalidate() { if (window && !window.isDestroyed()) { presents++; window.webContents.invalidate(); } }
-function setKeyboardFocus(editing) {
-  if (!window || window.isDestroyed()) return;
+// Resolves whether the page has native keyboard focus: the app active, the
+// window key and the page focused. Activation is asynchronous, so editing waits
+// up to a second for it.
+async function setKeyboardFocus(editing) {
+  if (!window || window.isDestroyed()) return false;
   keyboardFocus = editing;
-  if (editing) {
-    // A key window in an accessory app can accept ASCII without activating the native IME client.
-    if (isMac && !app.isActive()) app.focus({ steal: true });
-    if (!window.isFocused()) window.focus();
-  }
+  if (!editing) return false;
+  // A key window in an accessory app can accept ASCII without activating the native IME client.
+  if (isMac && !app.isActive()) app.focus({ steal: true });
+  if (!window.isFocused()) window.focus();
+  const ready = () => !window.isDestroyed() && (!isMac || app.isActive()) && window.isFocused() && window.webContents.isFocused();
+  for (let i = 0; i < 50 && !ready(); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  return ready();
 }
 function sendCursor(force = false) {
   if (!window || window.isDestroyed() || !rendererReady || !window.isVisible()) return;
@@ -226,9 +231,7 @@ else {
       inputEnabled = enabled;
       window.setIgnoreMouseEvents(!enabled, { forward: true });
     });
-    ipcMain.on('whale-keyboard-focus', (event, editing) => {
-      if (event.sender === window.webContents && typeof editing === 'boolean') setKeyboardFocus(editing);
-    });
+    ipcMain.handle('whale-keyboard-focus', (event, editing) => event.sender === window.webContents && typeof editing === 'boolean' ? setKeyboardFocus(editing) : false);
     const cursorPoll = setInterval(sendCursor, 50);
     const visibilityWatchdog = setInterval(() => { syncDesktop(); visibility(); }, 1000);
     visibilityWatchdog.unref?.();
