@@ -142,6 +142,57 @@ test('a slow reminder cannot delay the clock or display after the user changes p
   activity.close();
 });
 
+test('a Pomodoro reminder is asked for a minute before its phase ends and shows on time', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-timer-early-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  let now = Date.now(); const asked = [];
+  const activity = new ChatActivity({ dataDir, now: () => now, startTimer: false, onReminder: async state => {
+    asked.push(state.phase);
+    return asked.length === 2 ? null : generated('提醒 ' + asked.length);
+  } });
+  t.after(() => activity.close());
+  activity.tool(tool('pomodoro_set', { focusMinutes: 2, breakMinutes: 1, cycles: 2 }), 'chat_1');
+  const start = now;
+  now = start + 59000; await activity.tick();
+  assert.deepEqual(asked, [], 'nothing is asked more than a minute early');
+  now = start + 60000; await activity.tick();
+  assert.deepEqual(asked, ['await_break']);
+  assert.deepEqual(activity.snapshot().notices, [], 'the prepared reminder waits for its time');
+  now = start + 120000; await activity.tick();
+  assert.deepEqual(asked, ['await_break'], 'the prepared reminder is used, not asked for again');
+  const shown = activity.snapshot().notices[0];
+  assert.equal(shown.text, '提醒 1'); assert.equal(shown.createdAt, new Date(start + 120000).toISOString());
+
+  activity.advance(shown.advance);
+  await activity.tick();
+  assert.deepEqual(asked, ['await_break', 'await_focus'], 'a phase shorter than a minute is asked for at once');
+  now += 60000; await activity.tick();
+  assert.deepEqual(asked, ['await_break', 'await_focus', 'await_focus'], 'a prepared reminder that failed is asked for again on time');
+  assert.equal(activity.snapshot().notices.at(-1).text, '提醒 3');
+});
+
+test('a reminder prepared before the plan changed is dropped without reaching history', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-timer-changed-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  let now = Date.now(), asked = 0; const kept = [];
+  const activity = new ChatActivity({ dataDir, now: () => now, startTimer: false, onReminder: async () => {
+    const text = '提醒 ' + ++asked;
+    return { text, commit: () => { kept.push(text); return null; } };
+  } });
+  t.after(() => activity.close());
+  activity.tool(tool('pomodoro_set', { focusMinutes: 2, breakMinutes: 1, cycles: 2 }), 'chat_1');
+  const start = now;
+  now = start + 60000; await activity.tick();
+  assert.equal(asked, 1);
+  activity.tool(tool('pomodoro_control', { action: 'extend_focus', minutes: 1 }), 'chat_1');
+  now = start + 120000; await activity.tick();
+  assert.deepEqual(activity.snapshot().notices, [], 'the extended phase has not ended');
+  assert.equal(asked, 2, 'the new end is asked for a minute before it');
+  now = start + 180000; await activity.tick();
+  assert.deepEqual(activity.snapshot().notices.map(item => item.text), ['提醒 2']);
+  assert.deepEqual(kept, ['提醒 2'], 'the reply prepared for the old end never reaches history');
+});
+
 test('proactive chat stays within the configured window and daily cap, and does not run during a Pomodoro', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-proactive-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));

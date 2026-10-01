@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro, pomodoroInProgress, reminderCanAdvance } from '../runtime/chat/pomodoro.mjs';
+import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro, pomodoroInProgress, reminderCanAdvance, upcomingExpiry } from '../runtime/chat/pomodoro.mjs';
 
 const MINUTE = 60000, now = Date.UTC(2026, 8, 30, 2, 0);
 const call = (name, args = {}) => ({ name, arguments: JSON.stringify(args) });
@@ -92,4 +92,14 @@ test('the view reports the remaining time from the runtime clock', () => {
   assert.equal(viewPomodoro(control(focus, 'pause', now + 5 * MINUTE).state, now + 99 * MINUTE).remainingSeconds, 20 * 60);
   assert.equal(viewPomodoro(IDLE, now).remainingSeconds, undefined);
   assert.notEqual(viewPomodoro(focus, now), focus, 'the view is a copy');
+});
+
+test('a running phase knows the expiry it is heading for, under a key that changes with the plan', () => {
+  const focus = set(25, 5, 2).state, upcoming = upcomingExpiry(focus);
+  assert.equal(upcoming.dueAt, focus.dueAt); assert.equal(upcoming.state.phase, 'await_break'); assert.equal(upcoming.reminder.cycle, 1);
+  assert.equal(upcomingExpiry(focus).key, upcoming.key, 'an unchanged plan keeps its key');
+  const paused = control(focus, 'pause').state;
+  assert.equal(upcomingExpiry(paused), null, 'nothing is heading for an expiry while paused');
+  const changed = [control(focus, 'extend_focus', now, { minutes: 5 }).state, control(paused, 'resume', now + MINUTE).state, control(focus, 'start_break').state, set(25, 5, 2).state];
+  assert.equal(new Set([focus, ...changed].map(state => upcomingExpiry(state).key)).size, 5);
 });

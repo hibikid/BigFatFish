@@ -1,9 +1,11 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJson } from '../paths.mjs';
-import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro, pomodoroInProgress, reminderCanAdvance } from './pomodoro.mjs';
+import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro, pomodoroInProgress, reminderCanAdvance, upcomingExpiry } from './pomodoro.mjs';
 
 const DEFAULTS = { enabled: false, start: '09:00', end: '21:00', minMinutes: 45, maxMinutes: 90, dailyLimit: 3 };
+// A reminder is asked for this long before its phase ends, so it can show on time.
+const PREPARE_MS = 60000;
 const FALLBACK = { completed: '这轮专注完成了，辛苦啦。', await_break: '专注时间到了，准备休息一下吧。', await_focus: '休息时间到了，准备开始下一轮专注吧。' };
 const minute = value => { const match = /^(\d\d):(\d\d)$/.exec(value); return match && +match[1] < 24 && +match[2] < 60 ? +match[1] * 60 + +match[2] : null; };
 // A file that cannot be read, or does not hold an object, is treated as missing; the next save replaces it.
@@ -35,7 +37,7 @@ export class ChatActivity {
     this.nextAt = Number.isFinite(stored.nextAt) ? stored.nextAt : 0;
     this.day = stored.day || ''; this.dailyCount = stored.dailyCount || 0;
     this.lastUserAt = stored.lastUserAt || 0;
-    this.busy = false; this.closed = false; this.proactiveJob = false; this.lastProactiveCheck = 0;
+    this.busy = false; this.closed = false; this.proactiveJob = false; this.lastProactiveCheck = 0; this.prepared = null;
     this.presence = { busy: false, at: 0 };
     this.timer = startTimer ? setInterval(() => { void this.tick(); }, 1000) : null;
     this.timer?.unref();
@@ -98,16 +100,21 @@ export class ChatActivity {
     this.busy = true;
     const jobs = [];
     try {
-      const now = this.now(), expired = expirePomodoro(this.pomodoro, now, randomUUID);
+      const now = this.now(), upcoming = upcomingExpiry(this.pomodoro), expired = expirePomodoro(this.pomodoro, now, randomUUID);
       if (expired) {
         try { this.replacePlan(expired.state); } catch { return; }
         const { state, reminder } = expired, fallback = FALLBACK[reminder.phase];
+        const prepared = this.prepared?.key === upcoming.key ? this.prepared.reply : null;
+        this.prepared = null;
         jobs.push((async () => {
-          const generated = await this.onReminder({ ...state, fallback }).catch(() => null);
+          const generated = await prepared || await this.onReminder({ ...state, fallback }).catch(() => null);
           if (this.closed || !reminderApplies(this.pomodoro, reminder)) return;
           const reply = settle(generated);
           this.notice('pomodoro', reply?.text || fallback, reply?.conversationId || state.conversationId, reminderCanAdvance(reminder) ? reminder : null);
         })());
+      } else if (upcoming && upcoming.dueAt - now <= PREPARE_MS && this.prepared?.key !== upcoming.key) {
+        // Not committed until the phase ends; a plan changed meanwhile has another key, and this reply is dropped.
+        this.prepared = { key: upcoming.key, reply: this.onReminder({ ...upcoming.state, fallback: FALLBACK[upcoming.reminder.phase] }).catch(() => null) };
       }
       if (now - this.lastProactiveCheck >= 30000) {
         this.lastProactiveCheck = now;

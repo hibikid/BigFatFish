@@ -81,12 +81,12 @@ export class ChatService {
   }
   // Generates without touching history. A non-null result carries commit(),
   // which appends the reply to conversation `conversationId` (the spontaneous
-  // one when that is absent or deleted) and returns where it went; the caller
-  // commits only if the reply still applies once generation has finished.
+  // one when that is absent or deleted), dated at that moment, and returns where
+  // it went; the caller commits only if the reply still applies when it is due.
   async backgroundReply({ prompt, source, history = [], conversationId }) {
     if (this.active || this.background || !this.key() || !this.settings.baseUrl) return null;
     const key = this.key(), settings = { ...this.settings, maxTokens: this.settings.backgroundMaxTokens };
-    const controller = new AbortController(), id = randomUUID(), createdAt = new Date().toISOString();
+    const controller = new AbortController(), id = randomUUID();
     const background = { controller };
     background.done = new Promise(resolve => { background.resolve = resolve; });
     this.background = background;
@@ -97,7 +97,7 @@ export class ChatService {
       if (reply.status !== 'completed' || !text) return null;
       return { text, commit: () => {
         const target = this.conversations.find(conversationId) || this.conversations.spontaneous();
-        this.conversations.appendTo(target.id, { id, user: '', text, status: 'completed', source, createdAt, model: settings.model, usage: reply.usage, requests: reply.requests });
+        this.conversations.appendTo(target.id, { id, user: '', text, status: 'completed', source, createdAt: new Date().toISOString(), model: settings.model, usage: reply.usage, requests: reply.requests });
         return target.id;
       } };
     } finally {

@@ -56,6 +56,14 @@ export function expirePomodoro(state, now, newId) {
   return { state: next, reminder: Object.fromEntries(REMINDER_KEYS.map(key => [key, next[key]])) };
 }
 
+// The expiry a running phase is heading for: the waiting state and reminder it will
+// bring, under a key that changes with any change to the plan (pause, extension, an
+// early break, stop, a new plan). Null when no phase is running.
+export function upcomingExpiry(state) {
+  if (!['focus', 'break'].includes(state.phase)) return null;
+  return { key: [state.planId, state.cycle, state.phase, state.dueAt].join(':'), dueAt: state.dueAt, ...expirePomodoro(state, state.dueAt, () => null) };
+}
+
 // Whether a reminder still describes the current waiting phase of the current plan.
 export function reminderApplies(state, reminder) {
   return !!own(reminder, REMINDER_KEYS) && !!reminder.reminderId && REMINDER_KEYS.every(key => reminder[key] === state[key]);
