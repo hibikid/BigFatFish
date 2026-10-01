@@ -338,6 +338,8 @@ if (!freeDesktop) startProbe();
 startChild();
 writeState();
 
+// The heartbeat keeps the service alive while the pet is stopped; exiting then
+// would only make launchd restart the service every few seconds.
 heartbeat = setInterval(() => {
   if (stopping) return;
   if (freeDesktop) startChild();
@@ -349,7 +351,6 @@ heartbeat = setInterval(() => {
   }
   writeState();
 }, 500);
-heartbeat.unref?.();
 
 async function shutdown(signal) {
   if (shuttingDown) return;
