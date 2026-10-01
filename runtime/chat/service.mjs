@@ -47,11 +47,12 @@ export class ChatService {
     const baseUrl = String(input.baseUrl || '').trim(), model = String(input.model || '').trim();
     completionUrl(baseUrl);
     const persona = String(input.persona || '').trim(), maxTokens = Number(input.maxTokens);
+    const tokenLimit = value => Number.isInteger(value) && value >= 1 && value <= 32768;
     const backgroundMaxTokens = input.backgroundMaxTokens === undefined ? this.settings.backgroundMaxTokens : Number(input.backgroundMaxTokens);
     if (!model || model.length > 200 || /[\x00-\x1f]/.test(model)) throw new Error('请填写有效的模型名称');
     if (persona.length > 16000) throw new Error('角色人设最多 16000 个字符');
-    if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 32768) throw new Error('最长回复长度须为 1 到 32768 个 token');
-    if (!Number.isInteger(backgroundMaxTokens) || backgroundMaxTokens < 1 || backgroundMaxTokens > 32768) throw new Error('主动消息最长回复须为 1 到 32768 个 token');
+    if (!tokenLimit(maxTokens)) throw new Error('最长回复长度须为 1 到 32768 个 token');
+    if (!tokenLimit(backgroundMaxTokens)) throw new Error('主动消息最长回复须为 1 到 32768 个 token');
     const newKey = String(input.apiKey || '').trim().replace(/^Bearer\s+/i, '');
     if (newKey.length > 16384 || /[\x00-\x20]/.test(newKey)) throw new Error('API key 格式无效');
     if (this.settings.baseUrl && new URL(baseUrl).origin !== new URL(this.settings.baseUrl).origin && !newKey) throw new Error('更换会话网站时请重新输入该网站的 API key');
@@ -79,9 +80,10 @@ export class ChatService {
       now: this.now(), fetchImpl: this.fetchImpl, record: (request, credentials) => this.billing.record(request, credentials), ...options });
   }
   // Generates without touching history. A non-null result carries commit(),
-  // which appends the reply and returns its conversation id; the caller
+  // which appends the reply to conversation `conversationId` (the spontaneous
+  // one when that is absent or deleted) and returns where it went; the caller
   // commits only if the reply still applies once generation has finished.
-  async backgroundReply(prompt, kind, conversationId, includeHistory = true) {
+  async backgroundReply({ prompt, source, history = [], conversationId }) {
     if (this.active || this.background || !this.key() || !this.settings.baseUrl) return null;
     const key = this.key(), settings = { ...this.settings, maxTokens: this.settings.backgroundMaxTokens };
     const controller = new AbortController(), id = randomUUID(), createdAt = new Date().toISOString();
@@ -89,15 +91,13 @@ export class ChatService {
     background.done = new Promise(resolve => { background.resolve = resolve; });
     this.background = background;
     try {
-      const history = !includeHistory ? [] : kind === 'proactive' ? this.conversations.allTurns().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(-12) :
-        this.conversations.items.find(item => item.id === conversationId)?.turns || [];
       const reply = await this.reply(settings, key, { instruction: BACKGROUND_INSTRUCTION, history, prompt, id, signal: controller.signal,
         timeoutMs: Math.min(30000, this.timeoutMs), maxChars: MAX_REPLY_CHARS });
       const text = reply.text.trim();
       if (reply.status !== 'completed' || !text) return null;
       return { text, commit: () => {
-        const target = kind === 'proactive' ? this.conversations.spontaneous() : this.conversations.items.find(item => item.id === conversationId) || this.conversations.spontaneous();
-        this.conversations.appendTo(target.id, { id, user: '', text, status: 'completed', source: kind, createdAt, model: settings.model, usage: reply.usage, requests: reply.requests });
+        const target = this.conversations.find(conversationId) || this.conversations.spontaneous();
+        this.conversations.appendTo(target.id, { id, user: '', text, status: 'completed', source, createdAt, model: settings.model, usage: reply.usage, requests: reply.requests });
         return target.id;
       } };
     } finally {
@@ -105,14 +105,15 @@ export class ChatService {
       background.resolve();
     }
   }
+  // Half the time continues from the dozen latest exchanges across conversations; otherwise opens a new topic.
   proactive() {
-    const useHistory = this.activity.random() < 0.5;
-    return this.backgroundReply(useHistory ? '结合我们最近聊过的一件事，主动和我随便聊一句。不要推测我现在正在做什么。' :
-      '按你的人设，主动发起一个轻松的新话题。不要推测我现在正在做什么。', 'proactive', undefined, useHistory);
+    const recent = this.activity.random() < 0.5 ? this.conversations.allTurns().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(-12) : null;
+    return this.backgroundReply({ source: 'proactive', history: recent || [], prompt: recent ? '结合我们最近聊过的一件事，主动和我随便聊一句。不要推测我现在正在做什么。' :
+      '按你的人设，主动发起一个轻松的新话题。不要推测我现在正在做什么。' });
   }
   async reminder(state) {
     const prompt = `番茄钟状态：${state.phase}；第 ${state.cycle}/${state.cycles} 轮；专注 ${state.focusMinutes} 分钟，休息 ${state.breakMinutes} 分钟。请按人设简短提醒我${state.phase === 'await_break' ? '专注结束，可以准备休息了' : state.phase === 'await_focus' ? '休息结束，可以准备下一轮专注了' : '本次专注已经完成'}。阶段尚未开始，不要宣称已经开始，不要要求我发送消息确认，也不要解释界面操作。`;
-    return this.backgroundReply(prompt, 'pomodoro', state.conversationId);
+    return this.backgroundReply({ source: 'pomodoro', prompt, history: this.conversations.find(state.conversationId)?.turns, conversationId: state.conversationId });
   }
   persist() { this.conversations.persist(); }
   changeConversation(action, id) {

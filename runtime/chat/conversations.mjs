@@ -33,6 +33,7 @@ export class Conversations {
     }
   }
   get current() { return this.items.find(item => item.id === this.currentId); }
+  find(id) { return this.items.find(item => item.id === id) || null; }
   allTurns() { return this.items.flatMap(item => item.turns); }
   list() {
     return this.items.map(item => ({ id: item.id, kind: item.kind || 'normal', title: item.kind === 'spontaneous' ? '随便聊聊' : [...String(item.turns[0]?.user || '新会话').replace(/\s+/g, ' ')].slice(0, 48).join(''),

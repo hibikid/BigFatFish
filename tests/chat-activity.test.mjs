@@ -10,6 +10,8 @@ import { readEvents } from '../lib/event-stream.js';
 const tool = (name, args = {}) => ({ name, arguments: JSON.stringify(args) });
 const sse = events => new Response(events.map(value => 'data: ' + JSON.stringify(value) + '\n\n').join('') + 'data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
 const usage = { prompt_tokens: 1000, prompt_cache_hit_tokens: 200, prompt_cache_miss_tokens: 800, completion_tokens: 100, total_tokens: 1100 };
+// A generated background reply, as ChatService returns it; commit() reports where it was kept.
+const generated = (text, conversationId = null) => ({ text, commit: () => conversationId });
 async function consume(response) { const result = []; for await (const event of readEvents(response.body)) result.push(JSON.parse(event.data)); return result; }
 
 test('preauthorized streamed tool calls execute without a permission prompt, denied calls return only to the model, and each request is billed', async t => {
@@ -54,7 +56,7 @@ test('Pomodoro clock persists phases, waits at transitions, and rejects out-of-p
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   let now = Date.now(); const announced = [];
   const activity = new ChatActivity({ dataDir, now: () => now, startTimer: false,
-    onReminder: async state => '角色提醒：' + state.phase, onNotice: item => announced.push(item.kind) });
+    onReminder: async state => generated('角色提醒：' + state.phase), onNotice: item => announced.push(item.kind) });
   assert.equal(activity.tool(tool('pomodoro_set', { focusMinutes: 0, breakMinutes: 5, cycles: 2 }), 'chat_1').ok, false);
   assert.equal(activity.tool(tool('shell', { command: 'ls' }), 'chat_1').ok, false);
   activity.userActivity();
@@ -85,7 +87,7 @@ test('Pomodoro clock persists phases, waits at transitions, and rejects out-of-p
   assert.equal(activity.snapshot().pomodoro.phase, 'await_focus');
   assert.equal(activity.advance(breakReminder.advance).advanced, false, 'old break reminder must not start the next focus');
   const focusReminder = activity.snapshot().notices[0];
-  const resumed = new ChatActivity({ dataDir, now: () => now, startTimer: false, onReminder: async () => '完成啦' });
+  const resumed = new ChatActivity({ dataDir, now: () => now, startTimer: false, onReminder: async () => generated('完成啦') });
   assert.equal(resumed.snapshot().pomodoro.phase, 'await_focus');
   assert.equal(resumed.advance(focusReminder.advance).pomodoro.cycle, 2);
   now += 60000; await resumed.tick();
@@ -128,14 +130,14 @@ test('a slow reminder cannot delay the clock or display after the user changes p
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   let now = Date.now(), release;
   const activity = new ChatActivity({ dataDir, now: () => now, startTimer: false,
-    onReminder: state => state.phase === 'await_break' ? new Promise(resolve => { release = resolve; }) : Promise.resolve('下一轮开始吗？') });
+    onReminder: state => state.phase === 'await_break' ? new Promise(resolve => { release = resolve; }) : Promise.resolve(generated('下一轮开始吗？')) });
   activity.tool(tool('pomodoro_set', { focusMinutes: 1, breakMinutes: 1, cycles: 2 }), 'chat_1');
   now += 60000; const firstReminder = activity.tick();
   assert.equal(activity.snapshot().pomodoro.phase, 'await_break');
   activity.tool(tool('pomodoro_control', { action: 'start_break' }), 'chat_1');
   now += 60000; await activity.tick();
   assert.equal(activity.snapshot().pomodoro.phase, 'await_focus');
-  release('过期提醒'); await firstReminder;
+  release(generated('过期提醒')); await firstReminder;
   assert.deepEqual(activity.snapshot().notices.map(item => item.text), ['下一轮开始吗？']);
   activity.close();
 });
@@ -146,7 +148,7 @@ test('proactive chat stays within the configured window and daily cap, and does 
   const local = new Date(); local.setHours(10, 0, 0, 0);
   let now = local.getTime(), calls = 0;
   const activity = new ChatActivity({ dataDir, now: () => now, random: () => 0, startTimer: false,
-    onProactive: async () => { calls++; return { text: '今天想聊些什么？', conversationId: 'spontaneous_1' }; } });
+    onProactive: async () => { calls++; return generated('今天想聊些什么？', 'spontaneous_1'); } });
   activity.saveSettings({ enabled: true, start: '09:00', end: '21:00', minMinutes: 15, maxMinutes: 15, dailyLimit: 1 });
   now += 15 * 60000; activity.setPresence({ busy: true }); await activity.tick();
   assert.equal(calls, 0, 'open chat or approval bubble suppresses proactive calls');

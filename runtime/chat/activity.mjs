@@ -13,12 +13,11 @@ function readOrDefault(file, fallback) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : structuredClone(fallback);
 }
 
-// Keeps a generated reply that still applies: commits it to history when the
-// generator supports that, and yields null if there is no text or the commit fails.
+// Keeps a generated reply that still applies: commits it to history and yields its
+// text and conversation, or null if there is no text or the commit fails.
 function settle(generated) {
-  if (typeof generated === 'string') return generated ? { text: generated } : null;
   if (!generated?.text) return null;
-  try { return { text: generated.text, conversationId: generated.commit ? generated.commit() : generated.conversationId }; }
+  try { return { text: generated.text, conversationId: generated.commit() }; }
   catch { return null; }
 }
 
