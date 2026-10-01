@@ -15,26 +15,47 @@ const stalled = async (_url, { signal }) => new Response(new ReadableStream({ st
   signal.addEventListener('abort', () => stream.error(new Error('aborted')), { once: true });
 } }), { headers });
 
-test('a reply frames persona, local time, instruction and completed history, and offers tools only where the endpoint supports them', async () => {
+test('a reply frames persona, the time convention, instruction and completed history, and offers tools only where the endpoint supports them', async () => {
   const bodies = [];
   const fetchImpl = async (_url, options) => { bodies.push(JSON.parse(options.body)); return text('好'); };
   const history = [
-    { user: '旧问题', text: '旧回答', status: 'completed' },
-    { user: '失败的问题', text: '', status: 'failed' },
+    { user: '旧问题', text: '旧回答', status: 'completed', createdAt: new Date(2026, 8, 28, 0, 50).toISOString() },
+    { user: '失败的问题', text: '', status: 'failed', createdAt: new Date(2026, 8, 28, 0, 55).toISOString() },
   ];
   const tools = { definitions, policy: '工具说明', execute: () => ({ ok: true }) };
   const now = new Date(2026, 8, 28, 1, 0).getTime();
   const reply = await generateReply({ endpoint: deepseek, persona: '你是大肥鱼', instruction: '说短一点', history, prompt: '你好', tools, id: 'reply_frame', now, fetchImpl });
   assert.equal(reply.status, 'completed'); assert.equal(reply.text, '好'); assert.equal(reply.error, '');
   const [persona, time, ...rest] = bodies[0].messages.map(message => message.content);
-  assert.equal(persona, '你是大肥鱼'); assert.match(time, /2026-09-28 01:00/);
-  assert.deepEqual(rest, ['说短一点', '工具说明', '旧问题', '旧回答', '你好']);
+  assert.equal(persona, '你是大肥鱼'); assert.match(time, /方括号/); assert.ok(time.includes(Intl.DateTimeFormat().resolvedOptions().timeZone));
+  assert.deepEqual(rest, ['说短一点', '工具说明', '[2026-09-28 星期一 00:50] 旧问题', '旧回答', '[2026-09-28 星期一 01:00] 你好']);
   assert.equal(bodies[0].tools[0].function.name, 'pomodoro_status');
   assert.equal(bodies[0].max_tokens, 256);
 
   await generateReply({ endpoint: other, history, prompt: '你好', tools, id: 'reply_other', now, fetchImpl });
   assert.equal(bodies[1].tools, undefined, 'a compatible endpoint without tool support is sent plain chat');
   assert.equal(bodies[1].messages.some(message => message.content === '工具说明'), false);
+});
+
+test('each user message carries its send time, and a new one after a quiet spell says how long it has been', async () => {
+  const bodies = [];
+  const fetchImpl = async (_url, options) => { bodies.push(JSON.parse(options.body)); return text('嗯'); };
+  const history = [{ user: '我先去睡了', text: '晚安', status: 'completed', createdAt: new Date(2026, 8, 30, 23, 5).toISOString() }];
+  await generateReply({ endpoint: deepseek, history, prompt: '我回来了', id: 'next_day', now: new Date(2026, 9, 1, 15, 2).getTime(), fetchImpl });
+  assert.deepEqual(bodies[0].messages.slice(1).map(message => message.content),
+    ['[2026-09-30 星期三 23:05] 我先去睡了', '晚安', '[2026-10-01 星期四 15:02，距上一条消息约 16 小时] 我回来了']);
+  history.push({ user: '我回来了', text: '欢迎回来', status: 'completed', createdAt: new Date(2026, 9, 1, 15, 2).toISOString() });
+  await generateReply({ endpoint: deepseek, history, prompt: '刚才说到哪了', id: 'same_hour', now: new Date(2026, 9, 1, 15, 7).getTime(), fetchImpl });
+  assert.equal(bodies[1].messages.at(-1).content, '[2026-10-01 星期四 15:07] 刚才说到哪了', 'a short pause needs no reminder');
+});
+
+test('only the last message changes with the clock, so the provider can reuse the cached conversation', async () => {
+  const bodies = [];
+  const fetchImpl = async (_url, options) => { bodies.push(JSON.parse(options.body)); return text('在'); };
+  const history = [{ user: '早', text: '早呀', status: 'completed', createdAt: new Date(2026, 9, 1, 8, 0).toISOString() }];
+  for (const minute of [10, 41]) await generateReply({ endpoint: deepseek, persona: '你是大肥鱼', history, prompt: '在吗', id: 'cache_' + minute, now: new Date(2026, 9, 1, 9, minute).getTime(), fetchImpl });
+  assert.deepEqual(bodies[0].messages.slice(0, -1), bodies[1].messages.slice(0, -1));
+  assert.notEqual(bodies[0].messages.at(-1).content, bodies[1].messages.at(-1).content);
 });
 
 test('tool rounds execute locally, bill every request, and stop offering tools after two rounds', async () => {

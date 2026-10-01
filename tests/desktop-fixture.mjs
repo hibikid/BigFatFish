@@ -21,7 +21,7 @@ export async function makeFixture(dataDir) {
     if (url === 'https://api.deepseek.com/user/balance') return Response.json({ is_available: true, balance_infos: [
       { currency: 'CNY', total_balance: (110 - completedChatCalls * 0.001).toFixed(3), granted_balance: '10', topped_up_balance: '100' }
     ] });
-    const input = JSON.parse(body), last = input.messages.at(-1).content;
+    const input = JSON.parse(body), last = input.messages.at(-1).content.replace(/^\[[^\]]+\] /, '');
     if (last === '启动番茄钟') return new Response('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [
       { index: 0, id: 'timer_call', type: 'function', function: { name: 'pomodoro_set', arguments: '{"focusMinutes":30,"breakMinutes":5,"cycles":2}' } }
     ] } }] }) + '\n\ndata: ' + JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: {

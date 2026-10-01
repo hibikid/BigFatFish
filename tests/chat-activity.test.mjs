@@ -234,18 +234,18 @@ test('scheduled messages alternate between remembered and fresh topics without c
   now += 20 * 60000; await service.activity.tick();
   assert.equal(service.history().conversationId, selected);
   assert.equal(service.history().conversations.length, 2);
-  assert.ok(requests[1].messages.some(message => message.content === '昨天的咖啡很好喝'));
+  assert.ok(requests[1].messages.some(message => message.content.endsWith('] 昨天的咖啡很好喝')));
   assert.equal(requests[1].tools, undefined, 'automatic messages cannot call timer tools');
   const firstNotice = service.activity.snapshot().notices[0];
   assert.equal(firstNotice.kind, 'proactive');
   service.activity.ack(firstNotice.seq);
   random = 0.9; now += 15 * 60000; await service.activity.tick();
-  assert.equal(requests[2].messages.some(message => message.content === '昨天的咖啡很好喝'), false);
+  assert.equal(requests[2].messages.some(message => message.content.endsWith('] 昨天的咖啡很好喝')), false);
   assert.equal(service.history().conversations.length, 2, 'one dedicated spontaneous conversation is reused');
   assert.equal((await service.billing.summary({ baseUrl: 'https://api.deepseek.com', key: 'synthetic-key' })).recorded, 3);
 });
 
-test('chat and automatic replies receive fresh local time without persisting it in conversation history', async t => {
+test('chat and automatic replies tell the model the current time without persisting it in conversation history', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-chat-time-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   let now = new Date(2026, 8, 28, 1, 0).getTime();
@@ -261,26 +261,26 @@ test('chat and automatic replies receive fresh local time without persisting it 
   await consume(service.start({ id: 'late_timer', text: '现在开始一小时番茄钟' }));
   const first = requests[0].messages;
   assert.equal(first[0].content, '你是大肥鱼');
-  assert.match(first[1].content, /2026-09-28 01:00/);
   assert.ok(first[1].content.includes(Intl.DateTimeFormat().resolvedOptions().timeZone));
   assert.match(first[2].content, /深夜请求开始番茄钟/);
+  assert.equal(first.at(-1).content, '[2026-09-28 星期一 01:00] 现在开始一小时番茄钟');
   assert.equal(service.activity.snapshot().pomodoro.phase, 'idle', 'a reply without a tool call must not start the timer');
 
   now = new Date(2026, 8, 28, 19, 10).getTime();
   await consume(service.start({ id: 'evening_chat', text: '随便聊聊' }));
   const second = requests[1].messages;
-  assert.match(second[1].content, /2026-09-28 19:10/);
-  assert.equal(second.filter(message => message.content?.startsWith('当前用户设备本地时间：')).length, 1);
+  assert.equal(second.at(-1).content, '[2026-09-28 星期一 19:10，距上一条消息约 18 小时] 随便聊聊');
+  assert.ok(second.some(message => message.content === '[2026-09-28 星期一 01:00] 现在开始一小时番茄钟'));
   assert.ok(second.some(message => message.content === '已经很晚了，先休息好吗？'));
-  assert.equal(JSON.stringify(service.history()).includes('当前用户设备本地时间：'), false);
+  assert.deepEqual(service.history().turns.map(turn => turn.user), ['现在开始一小时番茄钟', '随便聊聊']);
 
   now = new Date(2026, 8, 28, 20, 30).getTime();
   await service.proactive();
-  assert.match(requests[2].messages[1].content, /2026-09-28 20:30/);
+  assert.match(requests[2].messages.at(-1).content, /^\[2026-09-28 星期一 20:30/);
   assert.equal(requests[2].tools, undefined);
   now = new Date(2026, 8, 28, 21, 0).getTime();
   await service.reminder({ phase: 'await_break', cycle: 1, cycles: 2, focusMinutes: 25, breakMinutes: 5 });
-  assert.match(requests[3].messages[1].content, /2026-09-28 21:00/);
+  assert.match(requests[3].messages.at(-1).content, /^\[2026-09-28 星期一 21:00\] /);
   assert.equal(requests[3].tools, undefined);
 });
 

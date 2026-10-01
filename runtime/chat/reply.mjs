@@ -1,6 +1,6 @@
 import { complete, visibleError } from './provider.mjs';
 import { billingUsage, officialDeepSeek } from './deepseek-pricing.mjs';
-import { localTimeContext } from './time-context.mjs';
+import { timeNote, timeTag } from './time-context.mjs';
 
 // Model requests that may follow tool calls; the last one is offered no tools, so it answers in text.
 const FOLLOW_UPS = 2;
@@ -12,8 +12,8 @@ function addUsage(total, usage) {
 }
 
 function context(turns) {
-  const messages = turns.filter(turn => turn.status === 'completed').slice(-20).flatMap(turn => [
-    ...(turn.user ? [{ role: 'user', content: turn.user }] : []), ...(turn.text ? [{ role: 'assistant', content: turn.text }] : [])
+  const messages = turns.flatMap(turn => [
+    ...(turn.user ? [{ role: 'user', content: timeTag(turn.createdAt) + turn.user }] : []), ...(turn.text ? [{ role: 'assistant', content: turn.text }] : [])
   ]);
   while (messages.length && messages.reduce((n, message) => n + message.content.length, 0) > 48000) messages.shift();
   return messages;
@@ -38,13 +38,14 @@ export async function generateReply({ endpoint, persona = '', instruction = '', 
   resetIdle();
   try {
     const offered = tools && officialDeepSeek(endpoint.baseUrl) ? tools : null;
+    const earlier = history.filter(turn => turn.status === 'completed').slice(-20);
     const messages = [
       ...(persona ? [{ role: 'system', content: persona }] : []),
-      { role: 'system', content: localTimeContext(now) },
+      { role: 'system', content: timeNote() },
       ...(instruction ? [{ role: 'system', content: instruction }] : []),
       ...(offered?.policy ? [{ role: 'system', content: offered.policy }] : []),
-      ...context(history),
-      { role: 'user', content: prompt }
+      ...context(earlier),
+      { role: 'user', content: timeTag(now, earlier.at(-1)?.createdAt) + prompt }
     ];
     const settings = { baseUrl: endpoint.baseUrl, model: endpoint.model, maxTokens: endpoint.maxTokens };
     for (let index = 0; index <= FOLLOW_UPS; index++) {

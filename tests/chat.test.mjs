@@ -29,7 +29,9 @@ async function consume(response) {
   for await (const event of readEvents(response.body)) events.push(JSON.parse(event.data));
   return events;
 }
-const withoutTime = messages => messages.filter(message => !message.content?.startsWith('当前用户设备本地时间：'));
+// The request as the conversation reads: no time convention, no time tags on user messages.
+const withoutTime = messages => messages.filter(message => !message.content?.includes('方括号里的时间由系统标注'))
+  .map(message => message.role === 'user' ? { ...message, content: message.content.replace(/^\[[^\]]+\] /, '') } : message);
 
 test('chat settings keep secrets out of settings/history and require a new key when changing site', async t => {
   const { service, dataDir, vault } = fixture(t);

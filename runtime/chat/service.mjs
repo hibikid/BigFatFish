@@ -97,7 +97,7 @@ export class ChatService {
       if (reply.status !== 'completed' || !text) return null;
       return { text, commit: () => {
         const target = this.conversations.find(conversationId) || this.conversations.spontaneous();
-        this.conversations.appendTo(target.id, { id, user: '', text, status: 'completed', source, createdAt: new Date().toISOString(), model: settings.model, usage: reply.usage, requests: reply.requests });
+        this.conversations.appendTo(target.id, { id, user: '', text, status: 'completed', source, createdAt: new Date(this.now()).toISOString(), model: settings.model, usage: reply.usage, requests: reply.requests });
         return target.id;
       } };
     } finally {
@@ -149,7 +149,7 @@ export class ChatService {
     this.background?.controller.abort();
     const conversationId = this.conversations.currentId, history = [...this.turns];
     const tools = { definitions: POMODORO_TOOLS, policy: POMODORO_POLICY, execute: call => this.activity.tool(call, conversationId) };
-    const turn = { id, user: text, text: '', status: 'streaming', source: 'user', createdAt: new Date().toISOString(), model: settings.model, requests: [] };
+    const turn = { id, user: text, text: '', status: 'streaming', source: 'user', createdAt: new Date(this.now()).toISOString(), model: settings.model, requests: [] };
     this.turns.push(turn); this.persist();
     try { this.activity.userActivity(); } catch {}
     this.active = { id, controller };
