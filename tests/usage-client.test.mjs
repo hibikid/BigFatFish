@@ -65,16 +65,16 @@ test('concurrent task polls share one read, persist the cursor, and never replay
   } };
   const client = create(options), shown = [];
   const handlers = { codex: value => shown.push(value.id) };
-  await Promise.all([client.pollTurns(handlers), client.pollTurns(handlers)]);
+  await Promise.all([client.pollCompletions(handlers), client.pollCompletions(handlers)]);
   assert.equal(reads, 1);
   assert.deepEqual(shown, []);
   record = { ...record, seq: 2, id: 'new', turn: 'new', notificationAt: 101 };
-  await Promise.all([client.pollTurns(handlers), client.pollTurns(handlers)]);
+  await Promise.all([client.pollCompletions(handlers), client.pollCompletions(handlers)]);
   assert.deepEqual(shown, ['new']);
   assert.equal(values.get('dshw-last-seq'), '2');
   assert.equal(values.get('dshw-last-turn-id'), 'new');
-  await client.pollTurns(handlers);
-  await create(options).pollTurns(handlers);
+  await client.pollCompletions(handlers);
+  await create(options).pollCompletions(handlers);
   assert.deepEqual(shown, ['new']);
 });
 
@@ -88,13 +88,13 @@ test('Claude completion polls once, ignores old events and never replays after a
   } };
   const client = create(options), shown = [];
   const handlers = { claude: value => shown.push(value.id) };
-  await client.pollTurns(handlers);
+  await client.pollCompletions(handlers);
   record = { ...record, id: 'new', completedAt: 101 };
-  await Promise.all([client.pollTurns(handlers), client.pollTurns(handlers)]);
+  await Promise.all([client.pollCompletions(handlers), client.pollCompletions(handlers)]);
   assert.equal(reads, 2);
   assert.deepEqual(shown, ['new']);
   assert.equal(values.get('dshw-last-claude-turn-id'), 'new');
-  await create(options).pollTurns(handlers);
+  await create(options).pollCompletions(handlers);
   assert.deepEqual(shown, ['new']);
 });
 
@@ -111,7 +111,7 @@ test('the source with the latest activity is shown, and a manual choice holds un
   assert.equal(client.source(), 'claude', 'the last shown source survives a reload');
   codex = { ok: true, seq: 1, id: 'c1', turn: 't', notificationAt: 2000 };
   claude = { ok: true, available: true, id: 'a1', completedAt: 1500 };
-  await client.pollTurns();
+  await client.pollCompletions();
   assert.equal(client.source(), 'codex', 'the newer Codex completion wins over the older Claude one');
   assert.deepEqual(changes, ['codex']);
   assert.equal(values.get('dshw-display-source'), 'codex');
@@ -121,14 +121,14 @@ test('the source with the latest activity is shown, and a manual choice holds un
   assert.equal(client.source(), 'claude');
   assert.equal(values.get('dshw-display-source-manual-at'), '3000');
   codex = { ...codex, seq: 2, id: 'c2', notificationAt: 2500 };
-  await client.pollTurns();
+  await client.pollCompletions();
   assert.equal(client.source(), 'claude', 'an activity older than the manual choice does not switch back');
   const reloaded = create(options);
-  await reloaded.pollTurns();
+  await reloaded.pollCompletions();
   assert.equal(reloaded.source(), 'claude', 'the manual choice survives a reload');
 
   codex = { ...codex, seq: 3, id: 'c3', notificationAt: 3500 };
-  await client.pollTurns();
+  await client.pollCompletions();
   assert.equal(client.source(), 'codex');
   assert.equal(values.has('dshw-display-source-manual-at'), false, 'a later completion ends the manual choice');
   client.select('codex'); client.select('other');
@@ -141,8 +141,8 @@ test('startup picks Claude from its quota snapshot when nothing newer happened',
     if (url === '/api/claude/subscription') { snapshotReads.push(url); return Response.json({ ...quota(), provider: 'Claude', observedAt: new Date(5000).toISOString() }); }
     return Response.json(url === '/dsh-whale/last-turn.json' ? { ok: true, seq: 1, id: 'c', turn: 't', notificationAt: 4000 } : { ok: false });
   } });
-  await client.pollTurns();
-  await client.pollTurns();
+  await client.pollCompletions();
+  await client.pollCompletions();
   assert.equal(client.source(), 'claude');
   assert.equal(snapshotReads.length, 1, 'the snapshot only chooses the source at startup');
 });

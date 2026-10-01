@@ -2,7 +2,8 @@ import { complete, visibleError } from './provider.mjs';
 import { billingUsage, officialDeepSeek } from './deepseek-pricing.mjs';
 import { localTimeContext } from './time-context.mjs';
 
-const TOOL_ROUNDS = 2;
+// Model requests that may follow tool calls; the last one is offered no tools, so it answers in text.
+const FOLLOW_UPS = 2;
 
 function addUsage(total, usage) {
   const result = { ...total };
@@ -18,8 +19,8 @@ function context(turns) {
   return messages;
 }
 
-// One character reply: framing, up to two local tool rounds, and a final text
-// round, each billed as its own request. It never writes history; the caller
+// One character reply: framing, then model requests until one answers in text,
+// each billed on its own. It never writes history; the caller
 // decides whether the result still applies. The result is always returned,
 // with `status` completed, cancelled or failed and a user-facing `error`.
 export async function generateReply({ endpoint, persona = '', instruction = '', history = [], prompt, tools = null, id, now = Date.now(),
@@ -46,17 +47,17 @@ export async function generateReply({ endpoint, persona = '', instruction = '', 
       { role: 'user', content: prompt }
     ];
     const settings = { baseUrl: endpoint.baseUrl, model: endpoint.model, maxTokens: endpoint.maxTokens };
-    for (let round = 0; round <= TOOL_ROUNDS; round++) {
+    for (let index = 0; index <= FOLLOW_UPS; index++) {
       if (controller.signal.aborted) throw new Error('aborted');
-      const request = { id: round ? id + ':' + round : id, model: endpoint.model, createdAt: new Date().toISOString(), status: 'streaming' };
+      const request = { id: index ? id + ':' + index : id, model: endpoint.model, createdAt: new Date().toISOString(), status: 'streaming' };
       reply.requests.push(request); record(request, credentials);
-      let calls = null, roundText = '', reasoning = '';
+      let calls = null, requestText = '', reasoning = '';
       try {
-        for await (const event of complete({ settings, key: endpoint.key, messages, fetchImpl, signal: controller.signal, tools: offered && round < TOOL_ROUNDS ? offered.definitions : null })) {
+        for await (const event of complete({ settings, key: endpoint.key, messages, fetchImpl, signal: controller.signal, tools: offered && index < FOLLOW_UPS ? offered.definitions : null })) {
           if (controller.signal.aborted) throw new Error('aborted');
           resetIdle();
           if (event.type === 'delta') {
-            roundText += event.text; reply.text += event.text;
+            requestText += event.text; reply.text += event.text;
             if (reply.text.length > maxChars) throw visibleError('回复内容超过本地长度限制');
             onDelta(event.text);
           } else if (event.type === 'finish' && event.reason !== 'tool_calls') reply.finishReason = event.reason;
@@ -70,7 +71,7 @@ export async function generateReply({ endpoint, persona = '', instruction = '', 
         record(request, credentials);
       }
       if (!calls) break;
-      const assistant = { role: 'assistant', content: roundText || null, tool_calls: calls };
+      const assistant = { role: 'assistant', content: requestText || null, tool_calls: calls };
       if (reasoning) assistant.reasoning_content = reasoning;
       messages.push(assistant);
       for (const call of calls) {

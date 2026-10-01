@@ -15,7 +15,7 @@
 | 模块 | 职责 |
 | --- | --- |
 | `runtime/chat/service.mjs` | 会话配置、密钥引用、历史、前台与后台回复的调度和取消 |
-| `runtime/chat/reply.mjs` | 生成一次回复：人设、本地时间与历史的组装，工具轮次，逐次请求记账，超时与错误说明；不写历史 |
+| `runtime/chat/reply.mjs` | 生成一次回复：组装人设、本地时间与历史，处理工具调用（之后最多再发两次模型请求），每个模型请求单独记账，超时与错误说明；不写历史 |
 | `runtime/chat/conversations.mjs` | 会话列表、当前会话、独立消息存储、旧历史迁移与原子保存 |
 | `runtime/chat/time-context.mjs` | 为当次模型请求构建设备本地时间上下文 |
 | `runtime/chat/provider.mjs` | 兼容 Chat Completions 的请求与 SSE 模型响应转换 |

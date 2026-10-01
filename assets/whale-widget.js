@@ -2376,7 +2376,7 @@
           size: 7,
           bold: true
         }]; else if (Array.isArray(content)) mods = content;
-        if (mods.length && whaleSysPush({
+        if (mods.length && pushSystemBubble({
           kind: 'alert',
           mods: usageAlertModsResolved(mods, below, amount),
           rank: rank === 1 || rank === 2 ? rank : 2,
@@ -9049,9 +9049,9 @@
     function whaleClick() {
       try {
         if (!bubbleOn) return;
-        var notice = bubbleQueue.current();
-        if (notice) {
-          if (notice.kind === 'approval') bubbleQueue.dismiss();
+        var systemBubble = bubbleQueue.current();
+        if (systemBubble) {
+          if (systemBubble.kind === 'approval') bubbleQueue.dismiss();
           return;
         }
         if (!bubbleShown) {
@@ -9098,7 +9098,7 @@
       if (!bubbleOn || !WhaleTurnNotice.enabled(notice, {
         failed: failedNoticeToggle.checked, cancelled: cancelledNoticeToggle.checked
       }, turnCostOn)) return;
-      whaleSysPush({
+      pushSystemBubble({
         kind: 'cost',
         amount: amount,
         notice: notice,
@@ -9107,7 +9107,7 @@
     }
     function showClaudeTurnBubble(subscription) {
       if (!bubbleOn) return;
-      whaleSysPush({ kind: 'cost', amount: null,
+      pushSystemBubble({ kind: 'cost', amount: null,
         notice: { provider: 'Claude', completionKind: 'success', subscription: subscription }, rank: 3 });
     }
     function playApprovalSound() {
@@ -9138,7 +9138,7 @@
     var USAGE_ALERT_TTL = 6500;
     // Queues a completion or usage alert; false when bubbles are off, so an
     // alert can use its popup card instead.
-    function whaleSysPush(item) {
+    function pushSystemBubble(item) {
       if (!bubbleOn || !item || !item.kind) return false;
       var ttlMs = item.kind === 'cost' ? turnCostCloseMs > 0 ? turnCostCloseMs : 0 : item.ttlMs != null ? item.ttlMs : USAGE_ALERT_TTL;
       bubbleQueue.push(Object.assign({}, item, { ttlMs: ttlMs }));
@@ -11577,7 +11577,7 @@
     if (window.whaleDesktop && window.whaleDesktop.testMode) {
       window.__whaleRenderTest = Object.freeze({
         refresh: refresh, usage: refreshUsageMain, next: bubbleNext, close: hideBubble,
-        poll: pollLastTurn, importRole: onRoleFileChosen, importBubble: bubbleUploadImg,
+        poll: pollCompletions, importRole: onRoleFileChosen, importBubble: bubbleUploadImg,
         openHistory: openUsageRecordsWindow,
         showCost: showCostBubble,
         open: whaleClick,
@@ -11680,8 +11680,8 @@
       if (!menuOpen) toggleMenu();
       showUsageSub();
     });
-    function pollLastTurn() {
-      return usageClient.pollTurns({
+    function pollCompletions() {
+      return usageClient.pollCompletions({
         codex: function (record) {
           var notice = WhaleTurnNotice.snapshot(record, state.currency);
           if (notice.completionKind === 'success') playTaskEndSound();
@@ -11693,8 +11693,8 @@
         }
       });
     }
-    pollLastTurn();
-    setInterval(pollLastTurn, 1000);
+    pollCompletions();
+    setInterval(pollCompletions, 1000);
     window.addEventListener('whale-approval-request', showApprovalReminder);
     window.addEventListener('whale-pomodoro-reminder', playPomodoroSound);
   }

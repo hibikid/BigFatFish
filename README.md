@@ -107,11 +107,14 @@ package.json                包信息与快捷脚本
 assets/                     whale-widget.js（挂件前端 bundle）+ 角色/气泡/音效素材
 desktop/                    Electron 主进程、预加载、桌面服务监督器、页面脚本
 desktop/ui/usage-*.js       前端用量请求与展示适配（见 docs/USAGE-DISPLAY.md）
-desktop/ui/chat*.js         会话输入、流式读取、计费展示与显示定位（见 docs/CHAT.md）
+desktop/ui/chat*.js         会话输入、流式事件消费、计费展示与显示定位（见 docs/CHAT.md）
+desktop/ui/bubble-queue.js  系统气泡队列：优先级、停留时间与审批提醒抢占（见 docs/RENDERING.md）
 desktop/macos/              macOS LaunchAgent 监督器（保留旧版窗口探针兼容代码）
 runtime/                    余额与用量服务：配置解析、provider、账本、汇率、会话监视、MCP、IPC
 runtime/chat/               独立角色会话、历史迁移、DeepSeek 请求与计费
-runtime/chat/activity.mjs   主动闲聊调度、番茄钟状态与工具白名单
+runtime/chat/activity.mjs   主动闲聊调度；番茄钟状态的保存、到点触发与提醒队列
+runtime/chat/pomodoro.mjs   番茄钟规则：阶段转换、数值范围、提醒身份与工具白名单，只处理值
+runtime/chat/reply.mjs      生成一次回复：组装提示、工具调用与逐次请求记账，不写历史
 lib/                        素材校验、资源库、widget 宿主，以及前后台共用的流式事件读取
 scripts/                    安装/启动/停止/卸载/回滚与启动器编译
 tests/                      关键行为测试与隔离桌面验证夹具

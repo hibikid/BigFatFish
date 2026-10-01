@@ -10,7 +10,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `desktop/ui/usage-client.js` | 用量来源：显示哪个来源及切换规则、各来源的路由与请求、余额刷新超时、任务通知游标与持久化 |
+| `desktop/ui/usage-client.js` | 用量来源：显示哪个来源及切换规则、各来源的路由与请求、余额刷新超时、完成事件游标与持久化 |
 | `desktop/ui/usage-presentation.js` | 余额与订阅显示状态、标题、额度文字、费用气泡文字的转换 |
 | `desktop/ui/turn-notice.js` | 已有任务结果快照、通知是否有效及开关规则 |
 | `assets/whale-widget.js` | 装配模块，把显示数据应用到现有 DOM、气泡、音效与金额绑定；不保存来源状态 |
@@ -24,11 +24,11 @@
 - `source()` / `select(source)`：当前显示的来源（`codex` 或 `claude`）；`select` 是菜单里的手动选择。
 - `overview({ manual?, getSubscription?, onBalanceFallback? })`：刷新当前来源。Codex 先读取订阅快照，可用时返回 `kind: 'subscription'`；读取临时失败时调用 `getSubscription()`，已有可用快照则返回 `kind: 'retained-subscription'`；否则查询 API，返回 `kind: 'balance'`。Claude 只读取自己的额度，返回 `subscription` 或 `missing`，从不回退到 API 余额。
 - `pollQuota()`：原有 5 秒本地轮询，只读取当前来源的额度，返回 `subscription` 或 `missing`。
-- `pollTurns({ codex, claude })`：读取两个来源的完成事件，每条新完成只交给对应来源的回调一次。并发读取期间后来的调用不消费通知；已读结果及启动前历史结果不重复提示。
+- `pollCompletions({ codex, claude })`：读取两个来源的完成事件，每条新的完成事件只交给对应来源的回调一次。并发读取期间后来的调用不消费完成事件；已读及启动前的完成事件不重复提示。
 - `records()`：读取用量记录。
 - `settings()` / `saveSettings(patch)`：读取及保存用量、音效设置；保存失败拒绝 Promise。
 
-所有读取结果都带 `source`。读取期间来源已切换时结果为 `null`，失败也不再抛出，界面无须自己比对来源；`onBalanceFallback()` 同样只在来源未变时调用。
+`overview` 和 `pollQuota` 的结果都带 `source`。读取期间来源已切换时结果为 `null`，失败也不再抛出，界面无须自己比对来源；`onBalanceFallback()` 同样只在来源未变时调用。
 
 **来源选择。** 显示最近有活动的来源：Codex 或 Claude 的完成事件都算活动；启动时 Claude 额度快照的采样时间也算一次 Claude 活动。菜单手动选择会一直保持（重载后也保持），直到出现比选择时间更晚的活动。来源变化时调用 `onSource(source)`，界面清空旧的显示数据并刷新。
 
