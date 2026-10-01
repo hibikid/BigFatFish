@@ -1,6 +1,6 @@
 # 来源、改编范围与许可（PROVENANCE）
 
-本目录是 **MeteorNOX** 的 [DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（包名 `dsh-whale-widget`）在 **For-Codex** 分支上的改造版本：把原本住在 DSH Web 界面右下角的挂件，改造成跟随 **Codex 桌面应用**窗口的伴随挂件（包名 `api-balance-whale`，Codex 插件名同为 `api-balance-whale`）。
+本目录是 **MeteorNOX** 的 [DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（包名 `dsh-whale-widget`）在 **For-Codex** 分支上的改造版本：把原本住在 DSH Web 界面右下角的挂件，改造成 **Codex 桌面应用**的伴随挂件，最初跟随 Codex 窗口，现为独立桌面宠物（包名 `api-balance-whale`，Codex 插件名同为 `api-balance-whale`）。
 
 ## 一、上游与本分支的关系
 
@@ -21,7 +21,7 @@
 
 ## 三、本分支的改造（0.2.4）
 
-- **宿主改造**：新增 `desktop/`（Electron 主进程、透明工具窗口、预加载、页面脚本、原生窗口跟随 `WindowApi.cs`、无窗口启动器 `WhaleLauncher.cs`、`supervisor.ps1`）与 `runtime/`（配置解析、余额 provider、账本、汇率、会话监视、MCP 工具、本地命名管道 IPC）。没有独立网页，也没有任何本地网页端口。
+- **宿主改造**：新增 `desktop/`（Electron 主进程、透明工具窗口、预加载、页面脚本、原生窗口跟随 `WindowApi.cs`（已随跟随模式移除，见 [ADR 0001](docs/adr/0001-retire-codex-window-follow-mode.md)）、无窗口启动器 `WhaleLauncher.cs`、`supervisor.ps1`）与 `runtime/`（配置解析、余额 provider、账本、汇率、会话监视、MCP 工具、本地命名管道 IPC）。没有独立网页，也没有任何本地网页端口。
 - **余额与用量**：支持兼容账单接口、New API/One API、自定义 JSON 接口与 DeepSeek；账本按账户与币种隔离；金额统一两位小数；失败/暂停轮次仍保留已观测消耗。
 - **汇率显示**：USD/CNY 显示换算，报价说明收在“刷新汇率”右侧的灰色 **!** 按钮中，按北京时间每日 00:15 检查。
 - **0.2.0 的界面与稳定性改动**：汇率说明改为点击展开；失败／暂停取消只显示中性扣费提示；显示判定加入周期重断言与还原事件重断言，窗口句柄变化后可自行恢复；移除硬编码的服务商名称与文档中的本机路径痕迹。

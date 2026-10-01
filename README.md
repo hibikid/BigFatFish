@@ -9,7 +9,7 @@
 
 **0.2.6 本地版本**：增加独立角色会话、会话列表、DeepSeek 会话计费、Ctrl+0 快捷键，并复核订阅气泡布局。详见 [0.2.6 变更说明](docs/CHANGELOG-0.2.6.md)。此前的 [0.2.5 开发基线](docs/CHANGELOG-0.2.5.md)仍可回退。
 
-**安装与回滚**：macOS 见 [安装说明](docs/MACOS.md)，Windows 的安装背景见 [0.2.4 安装与回滚说明](docs/INSTALL-AND-ROLLBACK-0.2.4.md)。0.2.6 的验证范围和已知限制见 [本版变更说明](docs/CHANGELOG-0.2.6.md)，原有基线见 [0.2.5 验证报告](docs/VERIFICATION-0.2.5.md)。
+**安装与回滚**：macOS 见 [安装说明](docs/MACOS.md)，Windows 的安装背景见 [0.2.4 安装与回滚说明](docs/INSTALL-AND-ROLLBACK-0.2.4.md)（其中与窗口跟随有关的内容已不适用；安装与停用脚本已改名为 `scripts/install-windows.ps1`、`scripts/uninstall-windows.ps1`）。0.2.6 的验证范围和已知限制见 [本版变更说明](docs/CHANGELOG-0.2.6.md)，原有基线见 [0.2.5 验证报告](docs/VERIFICATION-0.2.5.md)。
 
 **运行平台**：Windows 10/11 x64，或 Apple Silicon / Intel Mac；需要 Node.js 24+。挂件本身不依赖 Codex 桌面应用运行；安装 Codex 后才能在本机会话记录中观察 Codex token 用量。详细步骤见 [macOS 安装说明](docs/MACOS.md)。
 
@@ -43,17 +43,19 @@
 
 ## 安装、停用与回滚
 
-Windows 需要 Node.js 24+；先运行 `安装桌面组件.cmd`，再运行 `安装自动跟随.cmd`。macOS 直接双击 `安装 Mac 自动跟随.command`，它会优先使用 Homebrew 的 Node/npm，安装 Electron 44.3.0 并注册当前用户的 LaunchAgent。组件安装需联网获取 Electron。详细步骤和卸载入口见 [macOS 安装说明](docs/MACOS.md)。
+Windows 需要 Node.js 24+；先运行 `安装桌面组件.cmd`，再运行 `安装开机自启.cmd`。macOS 直接双击 `安装 Mac 开机自启.command`，它会优先使用 Homebrew 的 Node/npm，安装 Electron 44.3.0 并注册当前用户的 LaunchAgent。组件安装需联网获取 Electron。详细步骤和卸载入口见 [macOS 安装说明](docs/MACOS.md)。
 
 Windows 使用任务计划服务，macOS 使用用户级 LaunchAgent。桌面服务均以当前用户普通权限运行，登录后启动独立挂件；Codex 的打开、移动、最小化和退出均不会影响其显示。无需管理员权限，不保存登录密码，不调整执行策略或安全软件设置。
 
+早期版本让挂件跟随 Codex 窗口移动，这一模式已经移除（见 [ADR 0001](docs/adr/0001-retire-codex-window-follow-mode.md)）。按旧方式安装的电脑无需重装，下次登录或重新运行安装入口后即以独立桌面方式运行。原来的“安装自动跟随”“停用自动跟随”入口已改名为“安装开机自启”“停用开机自启”。
+
 桌面服务不保留命令窗口；可用“停止挂件服务”与“启动桌面挂件”控制当前实例。计划任务名为 **Codex API Balance Whale**；异常退出会尝试恢复。停用与回滚入口：
 
-- `停用自动跟随.cmd`：停止监视器与挂件并移除开机启动项，保留设置、素材和账本。
+- `停用开机自启.cmd`：停止桌面服务与挂件并移除开机启动项，保留设置、素材和账本。
 - `停止挂件服务.cmd` / `启动桌面挂件.cmd`：仅停止或启动当前挂件进程。
 - 源码回退使用固定 Git 标签；当前版本为 `codex-v0.2.6`，此前的步骤见 [0.2.5 基线与回退](docs/BASELINE-0.2.5.md)。用户数据须单独备份。
 
-macOS 对应入口为 `安装 Mac 自动跟随.command`、带鲸鱼图标的 `启动桌面挂件.app`（或兼容入口 `启动桌面挂件.command`）、`停止挂件服务.command`、`停用自动跟随.command`；也可运行 `npm run install:mac`、`npm run uninstall:mac`。
+macOS 对应入口为 `安装 Mac 开机自启.command`、带鲸鱼图标的 `启动桌面挂件.app`（或兼容入口 `启动桌面挂件.command`）、`停止挂件服务.command`、`停用开机自启.command`；也可运行 `npm run install:mac`、`npm run uninstall:mac`。
 
 发布压缩包不含作者本机的备份与密钥，另一台电脑请在做任何升级前自行备份插件目录。
 
@@ -109,7 +111,7 @@ desktop/                    Electron 主进程、预加载、桌面服务监督�
 desktop/ui/usage-*.js       前端用量请求与展示适配（见 docs/USAGE-DISPLAY.md）
 desktop/ui/chat*.js         会话输入、流式事件消费、计费展示与显示定位（见 docs/CHAT.md）
 desktop/ui/bubble-queue.js  系统气泡队列：优先级、停留时间与审批提醒抢占（见 docs/RENDERING.md）
-desktop/macos/              macOS LaunchAgent 监督器（保留旧版窗口探针兼容代码）
+desktop/macos/              macOS LaunchAgent 监督器与钥匙串密钥存储
 runtime/                    余额与用量服务：配置解析、provider、账本、汇率、会话监视、MCP、IPC
 runtime/chat/               独立角色会话、历史迁移、DeepSeek 请求与计费
 runtime/chat/activity.mjs   主动闲聊调度；番茄钟状态的保存、到点触发与提醒队列

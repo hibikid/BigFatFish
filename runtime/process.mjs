@@ -11,7 +11,7 @@ export async function runningService(dataDir = DATA_HOME) {
 export async function startSupervisor(dataDir = DATA_HOME) {
   const config = readJson(path.join(dataDir, 'follow-config.json'), {});
   if (process.platform === 'darwin') {
-    if (config.platform !== 'darwin' || !['follow-codex', 'free-desktop'].includes(config.mode) || config.enabled !== true || !config.label) {
+    if (config.platform !== 'darwin' || config.enabled !== true || !config.label) {
       throw new Error('请先运行 scripts/install-macos.mjs 安装 macOS 桌面挂件');
     }
     const pause = path.join(dataDir, 'pause-until-host-exit.json');
@@ -20,16 +20,16 @@ export async function startSupervisor(dataDir = DATA_HOME) {
     try {
       await promisify(execFile)('/bin/launchctl', ['kickstart', domain + '/' + config.label], { timeout: 10000 });
     } catch {
-      throw new Error('macOS 桌面服务未能启动，请运行“安装 Mac 自动跟随.command”修复');
+      throw new Error('macOS 桌面服务未能启动，请运行“安装 Mac 开机自启.command”修复');
     }
     return;
   }
-  if (config.taskName !== 'Codex API Balance Whale') throw new Error('请运行“安装自动跟随.cmd”以修复桌面服务');
+  if (config.taskName !== 'Codex API Balance Whale') throw new Error('请运行“安装开机自启.cmd”以修复桌面服务');
   const pause = path.join(dataDir, 'pause-until-host-exit.json');
   if (fs.existsSync(pause)) fs.unlinkSync(pause);
   const scheduler = path.join(process.env.WINDIR || 'C:\\Windows', 'System32', 'schtasks.exe');
   try { await promisify(execFile)(scheduler, ['/Run', '/TN', config.taskName], { windowsHide: true, timeout: 10000 }); }
-  catch { throw new Error('Windows 桌面服务未能启动，请运行“安装自动跟随.cmd”修复'); }
+  catch { throw new Error('Windows 桌面服务未能启动，请运行“安装开机自启.cmd”修复'); }
 }
 export async function ensureService({ dataDir = DATA_HOME } = {}) {
   let running = await runningService(dataDir);
@@ -42,11 +42,4 @@ export async function serviceRequest(route, options = {}) { return bridgeRequest
 export async function launchDesktop({ dataDir = DATA_HOME } = {}) {
   await ensureService({ dataDir });
   return bridgeRequest('/api/show', { method: 'POST', dataDir });
-}
-export function supervisorStatus(dataDir = DATA_HOME) {
-  const config = readJson(path.join(dataDir, 'follow-config.json'), {});
-  const installed = process.platform === 'darwin'
-    ? config.platform === 'darwin' && config.enabled === true && ['follow-codex', 'free-desktop'].includes(config.mode) && !!config.label
-    : config.taskName === 'Codex API Balance Whale';
-  return { installed, ...readJson(path.join(dataDir, 'supervisor-state.json'), {}) };
 }

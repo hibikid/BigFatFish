@@ -12,7 +12,7 @@ const ALLOWED = new Map([
   ['/api/status', 'GET'], ['/api/subscription-rate-limits', 'GET'], ['/api/claude/subscription', 'GET'], ['/api/claude/last-turn', 'GET'], ['/dsh-whale/balance.json', 'GET'], ['/dsh-whale/usage-records.json', 'GET'], ['/api/show', 'POST'], ['/api/stop', 'POST'],
 ]);
 
-export async function startBridge(dispatcher, { dataDir = DATA_HOME, onHost = null, onApprovalRequest = null } = {}) {
+export async function startBridge(dispatcher, { dataDir = DATA_HOME, onApprovalRequest = null } = {}) {
   const pipe = pipeName(dataDir), token = crypto.randomBytes(32).toString('hex'), instanceId = crypto.randomUUID();
   if (process.platform !== 'win32' && fs.existsSync(pipe)) {
     let stale = true;
@@ -43,11 +43,6 @@ export async function startBridge(dispatcher, { dataDir = DATA_HOME, onHost = nu
         const message = JSON.parse(input.slice(0, input.indexOf('\n')));
         const candidate = Buffer.from(typeof message.token === 'string' ? message.token : '');
         if (candidate.length !== token.length || !crypto.timingSafeEqual(candidate, Buffer.from(token))) throw new Error('unauthorized');
-        if (message.route === '/internal/host' && message.method === 'POST' && onHost) {
-          await onHost(message.body);
-          if (!socket.destroyed) socket.end(JSON.stringify({ status: 200, payload: { ok: true } }) + '\n');
-          return;
-        }
         if (message.route === '/internal/approval-request' && message.method === 'POST' && onApprovalRequest && message.body?.event === 'PermissionRequest') {
           onApprovalRequest();
           if (!socket.destroyed) socket.end(JSON.stringify({ status: 200, payload: { ok: true } }) + '\n');
@@ -85,7 +80,7 @@ function socketResponds(pipe) {
 
 export async function bridgeRequest(route, { method = 'GET', body, dataDir = DATA_HOME, runtime = null, timeoutMs = 30000 } = {}) {
   const info = runtime || readJson(path.join(dataDir, 'runtime.json'), null);
-  if (!info || info.transport !== 'local-ipc' || info.pipe !== pipeName(dataDir)) throw new Error('挂件尚未随 Codex 启动');
+  if (!info || info.transport !== 'local-ipc' || info.pipe !== pipeName(dataDir)) throw new Error('挂件尚未启动');
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(info.pipe); let input = '', settled = false;
     const finish = (error, value) => { if (settled) return; settled = true; socket.destroy(); error ? reject(error) : resolve(value); };

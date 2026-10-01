@@ -15,6 +15,6 @@ if [[ -z "$NODE_BIN" ]]; then
 fi
 
 if ! "$NODE_BIN" scripts/control.mjs open; then
-  /usr/bin/osascript -e 'display alert "无法启动桌面挂件" message "请确认已先运行安装 Mac 自动跟随.command。" as critical'
+  /usr/bin/osascript -e 'display alert "无法启动桌面挂件" message "请确认已先运行安装 Mac 开机自启.command。" as critical'
   exit 1
 fi

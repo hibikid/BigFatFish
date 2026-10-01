@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { bridgeRequest, pipeName } from '../../runtime/bridge.mjs';
+import { pipeName } from '../../runtime/bridge.mjs';
 
 const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 function argument(name, fallback) {
@@ -15,7 +15,6 @@ const dataDir = path.resolve(argument('--data-dir', path.join(process.env.CODEX_
 const pluginRoot = path.resolve(argument('--plugin-root', scriptRoot));
 const configFile = path.join(dataDir, 'follow-config.json');
 const stateFile = path.join(dataDir, 'supervisor-state.json');
-const followStateFile = path.join(dataDir, 'follow-state.json');
 const runtimeFile = path.join(dataDir, 'runtime.json');
 const pauseFile = path.join(dataDir, 'pause-until-host-exit.json');
 const lockDir = path.join(dataDir, 'macos-supervisor.lock');
@@ -85,16 +84,16 @@ async function stopStaleRuntime() {
   }
 }
 
+// An install from the retired window-follow mode has another `mode` and a probe
+// path; neither matters any more, so it starts the pet without reinstalling.
 const config = readJson(configFile, {});
-const freeDesktop = config.mode === 'free-desktop';
-if (config.platform !== 'darwin' || !['follow-codex', 'free-desktop'].includes(config.mode) || config.enabled !== true) {
-  process.stderr.write('macOS desktop configuration is missing, disabled or invalid. Run scripts/install-macos.mjs first.\n');
+if (config.platform !== 'darwin' || config.enabled !== true) {
+  process.stderr.write('macOS desktop configuration is missing or disabled. Run scripts/install-macos.mjs first.\n');
   process.exit(1);
 }
 const electronPath = path.resolve(config.electronPath || '');
-const probePath = path.resolve(config.probePath || '');
-if (!fs.existsSync(electronPath) || (!freeDesktop && !fs.existsSync(probePath))) {
-  process.stderr.write(freeDesktop ? 'Desktop runtime is missing. Run scripts/install-macos.mjs first.\n' : 'Desktop runtime or window probe is missing. Run scripts/install-macos.mjs first.\n');
+if (!fs.existsSync(electronPath)) {
+  process.stderr.write('Desktop runtime is missing. Run scripts/install-macos.mjs first.\n');
   process.exit(1);
 }
 
@@ -105,70 +104,13 @@ let stopping = false;
 let shuttingDown = false;
 let child = null;
 let lastLaunchAt = 0;
-let probe = null;
-let probeBuffer = '';
-let probeGeneration = 0;
-let probeRestartTimer = null;
-let lastProbeAt = Date.now();
-let hostState = { hostAlive: false, hostPid: 0, hostSession: '', window: '0', visible: false, attached: false, nativeFollowing: false, followMode: 'macos-cgwindow-poll' };
-let sequence = 0;
-let pendingState = null;
-let sending = false;
-let heartbeat = null;
 const startedAt = new Date().toISOString();
 
-function unavailableHostState() {
-  return { hostAlive: false, hostPid: 0, hostSession: '', window: '0', visible: false, attached: false, nativeFollowing: false, followMode: 'macos-cgwindow-poll' };
-}
-
-function queueHostState(state) {
-  pendingState = state;
-  void pumpHostState();
-}
-
-async function pumpHostState() {
-  if (sending) return;
-  sending = true;
-  try {
-    while (pendingState) {
-      const state = pendingState;
-      pendingState = null;
-      try {
-        await bridgeRequest('/internal/host', { method: 'POST', body: state, dataDir, timeoutMs: 1500 });
-      } catch {
-        // The Electron host may not have created its socket yet. The heartbeat
-        // retries the latest state without allowing an unbounded queue to form.
-      }
-      await delay(4);
-    }
-  } finally {
-    sending = false;
-  }
-}
-
-async function waitForHostDelivery(timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while ((pendingState || sending) && Date.now() < deadline) await delay(25);
-  return !pendingState && !sending;
-}
-
-function pausedFor() {
-  const pause = readJson(pauseFile, {});
-  if (!Object.keys(pause).length) return false;
-  if (freeDesktop) return pause.pauseAll === true;
-  if (!hostState.hostAlive) {
-    try { fs.unlinkSync(pauseFile); } catch {}
-    return false;
-  }
-  if (pause.pauseAll === true) return true;
-  if (pause.hostSession && hostState.hostSession) return String(pause.hostSession) === String(hostState.hostSession);
-  if (pause.hostWindow && hostState.window && hostState.window !== '0') return String(pause.hostWindow) === String(hostState.window);
-  if (pause.hostPid && hostState.hostPid) return String(pause.hostPid) === String(hostState.hostPid);
-  return false;
-}
+// A pet stopped from its menu stays stopped until the start command removes the marker.
+const stoppedByUser = () => readJson(pauseFile, {}).pauseAll === true;
 
 function startChild() {
-  if (stopping || child || (!freeDesktop && !hostState.hostAlive) || pausedFor()) return;
+  if (stopping || child || stoppedByUser()) return;
   const now = Date.now();
   if (now - lastLaunchAt < 4000) return;
   const main = path.join(pluginRoot, 'desktop', 'main.cjs');
@@ -177,11 +119,10 @@ function startChild() {
     return;
   }
   const environment = { ...process.env, WHALE_LAUNCH_TIME: String(now) };
-  if (!freeDesktop) environment.WHALE_INITIAL_HOST = JSON.stringify(hostState);
   delete environment.ELECTRON_RUN_AS_NODE;
   let current;
   try {
-    current = spawn(electronPath, [main, '--whale-data=' + dataDir, '--supervised', ...(freeDesktop ? ['--free-desktop'] : [])], {
+    current = spawn(electronPath, [main, '--whale-data=' + dataDir, '--supervised'], {
       cwd: pluginRoot,
       env: environment,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -221,10 +162,6 @@ function waitForExit(running, timeoutMs) {
 async function stopChild() {
   const running = child;
   if (!running) return;
-  if (!freeDesktop) {
-    queueHostState({ hostAlive: false, monitorExit: true, serial: ++sequence });
-    await waitForHostDelivery(1800);
-  }
   try { running.stdin.end(); } catch {}
   if (await waitForExit(running, 2500)) return;
   try { running.kill('SIGTERM'); } catch {}
@@ -233,122 +170,28 @@ async function stopChild() {
   await waitForExit(running, 500);
 }
 
-async function handleHostState(state) {
-  if (freeDesktop) return;
-  hostState = state;
-  hostState.serial = ++sequence;
-  writeJson(followStateFile, {
-    childPid: child?.pid || null,
-    state: hostState,
-    native: { enabled: false, mode: 'CGWindowList polling' },
-    at: new Date().toISOString(),
-  });
-  queueHostState(hostState);
-  if (hostState.hostAlive) startChild();
-}
-
-function scheduleProbeRestart() {
-  if (stopping || probeRestartTimer) return;
-  probeRestartTimer = setTimeout(() => {
-    probeRestartTimer = null;
-    startProbe();
-  }, 1500);
-  probeRestartTimer.unref?.();
-}
-
-function startProbe() {
-  if (freeDesktop || stopping || probe) return;
-  const generation = ++probeGeneration;
-  probeBuffer = '';
-  lastProbeAt = Date.now();
-  const current = spawn(probePath, ['--bundle-id', process.env.WHALE_CODEX_BUNDLE_ID || config.bundleId || 'com.openai.codex'], {
-    cwd: pluginRoot,
-    env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  probe = current;
-  current.stdout.setEncoding('utf8');
-  current.stdout.on('data', chunk => {
-    if (generation !== probeGeneration) return;
-    lastProbeAt = Date.now();
-    probeBuffer += chunk;
-    const lines = probeBuffer.split('\n');
-    probeBuffer = lines.pop() || '';
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try { void handleHostState(JSON.parse(line)); }
-      catch { log('invalid window probe output'); }
-    }
-  });
-  current.stderr.on('data', data => log('probe: ' + String(data).trim().slice(0, 4000)));
-  current.on('error', error => {
-    if (probe === current) probe = null;
-    log('window probe failed to start: ' + error.message);
-    scheduleProbeRestart();
-  });
-  current.on('close', (code, signal) => {
-    if (probe === current) probe = null;
-    if (!stopping) {
-      log('window probe exited unexpectedly: code=' + String(code) + ' signal=' + String(signal));
-      void handleHostState(unavailableHostState());
-      scheduleProbeRestart();
-    }
-  });
-}
-
-function restartProbe(reason) {
-  if (stopping) return;
-  log('restarting window probe: ' + reason);
-  const current = probe;
-  probe = null;
-  try { current?.kill('SIGTERM'); } catch {}
-  void handleHostState(unavailableHostState());
-  scheduleProbeRestart();
-}
-
 function writeState() {
-  const heartbeatAt = new Date().toISOString();
   writeJson(stateFile, {
     pid: process.pid,
     parentPid: process.ppid,
     sessionId,
     installId: config.installId || null,
     startedAt,
-    heartbeatAt,
+    heartbeatAt: new Date().toISOString(),
     childPid: child?.pid || null,
-    probePid: probe?.pid || null,
-    hostPid: hostState.hostPid || null,
-    hostAlive: !!hostState.hostAlive,
-    host: freeDesktop ? 'independent-desktop' : 'node-macos',
     platform: 'darwin',
-    mode: config.mode,
     pluginRoot,
   });
-  if (freeDesktop) {
-    writeJson(followStateFile, {
-      childPid: child?.pid || null,
-      state: { hostAlive: false, visible: true, attached: false, nativeFollowing: false, followMode: 'free-desktop' },
-      native: { enabled: false, mode: 'free-desktop' },
-      at: heartbeatAt,
-    });
-  }
 }
 
-if (!freeDesktop) startProbe();
 startChild();
 writeState();
 
 // The heartbeat keeps the service alive while the pet is stopped; exiting then
 // would only make launchd restart the service every few seconds.
-heartbeat = setInterval(() => {
+const heartbeat = setInterval(() => {
   if (stopping) return;
-  if (freeDesktop) startChild();
-  else {
-    if (!probe) startProbe();
-    else if (Date.now() - lastProbeAt > 5000) restartProbe('no output for 5 seconds');
-    queueHostState(hostState);
-    if (hostState.hostAlive) startChild();
-  }
+  startChild();
   writeState();
 }, 500);
 
@@ -356,9 +199,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   clearInterval(heartbeat);
-  if (probeRestartTimer) clearTimeout(probeRestartTimer);
   log('stopping: ' + signal);
-  try { probe?.kill('SIGTERM'); } catch {}
   await stopChild();
   stopping = true;
   releaseLock();
@@ -370,4 +211,4 @@ process.on('SIGINT', () => { void shutdown('SIGINT').finally(() => process.exit(
 process.on('uncaughtException', error => log('uncaught exception: ' + error.stack));
 process.on('unhandledRejection', error => log('unhandled rejection: ' + String(error?.stack || error)));
 
-log('macOS supervisor started for ' + pluginRoot + ' in ' + config.mode + ' mode');
+log('macOS supervisor started for ' + pluginRoot);

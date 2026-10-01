@@ -13,7 +13,13 @@ export function stripRetiredModules(value) {
   return value;
 }
 
+// Written only by the retired window-follow mode (docs/adr/0001); nothing reads them now.
+const RETIRED_FOLLOW_FILES = ['follow-state.json', 'follow-input-error.json', path.join('native', 'whale-window-probe'), path.join('native', 'swift-cache')];
+
 export function migrateData(dataDir) {
+  for (const name of RETIRED_FOLLOW_FILES) {
+    try { fs.rmSync(path.join(dataDir, name), { recursive: true, force: true }); } catch {}
+  }
   const marker = path.join(dataDir, 'migration-follow-v1.json');
   if (readJson(marker, {}).complete) return;
   const names = ['api-settings.json', '.dshw-size.json', '.dshw-bubble.json', 'ui-state.json'];

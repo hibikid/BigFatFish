@@ -20,7 +20,7 @@ async function run(phase) {
   const env = { ...process.env, CODEX_HOME: codexHome, WHALE_HOME: dataDir, WHALE_DESKTOP_TEST: '1',
     WHALE_DESKTOP_AUDIT: '0', WHALE_TEST_PHASE: phase, WHALE_TEST_OUTPUT: output };
   delete env.ELECTRON_RUN_AS_NODE;
-  const child = spawn(electron, [path.join(ROOT, 'desktop', 'main.cjs'), '--whale-data=' + dataDir, '--free-desktop'], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const child = spawn(electron, [path.join(ROOT, 'desktop', 'main.cjs'), '--whale-data=' + dataDir], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   let logs = '', timedOut = false;
   child.stdout.on('data', chunk => { logs += chunk; });
   child.stderr.on('data', chunk => { logs += chunk; });

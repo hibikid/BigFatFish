@@ -67,6 +67,13 @@ test('a stopped pet stays stopped while the desktop service keeps running, and s
   await until(() => service.launches().length === 1, 'removing the stop marker must start the pet');
 });
 
+test('an install from the retired window-follow mode starts the pet without Codex or a reinstall', async t => {
+  const service = desktopService(t, { mode: 'follow-codex', probePath: path.join(os.tmpdir(), 'missing-whale-window-probe') });
+  service.start();
+  await until(() => service.launches().length === 1, 'the pet must start without a window probe or a Codex window');
+  assert.deepEqual(service.launches()[0].args, ['--whale-data=' + service.dataDir, '--supervised']);
+});
+
 test('stopping the desktop service stops the pet and clears the service state', async t => {
   const service = desktopService(t), supervisor = service.start();
   await until(() => service.launches().length === 1, 'the service must start the pet');

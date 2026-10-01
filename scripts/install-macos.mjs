@@ -129,6 +129,7 @@ installDesktopIfNeeded();
 prepareElectronBundle();
 writeLaunchAgent();
 
+// `mode` keeps a rollback to a version with window following in free-desktop mode.
 const config = {
   platform: 'darwin',
   enabled: true,
@@ -174,6 +175,6 @@ if (!verified) {
 
 installApprovalHook({ nodePath });
 
-process.stdout.write('macOS desktop component is installed in free-desktop mode.\n');
+process.stdout.write('macOS desktop service is installed.\n');
 process.stdout.write('The whale starts independently of Codex and can be shown or hidden from the tray or Cmd+Option+W.\n');
 process.stdout.write('Approval reminder hook installed. Review and trust it with /hooks in Codex.\n');

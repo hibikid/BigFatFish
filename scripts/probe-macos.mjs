@@ -12,12 +12,12 @@ let config = {};
 try {
   config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
 } catch {}
-if (config.platform !== 'darwin' || config.enabled !== true || config.mode !== 'free-desktop') {
-  process.stderr.write('Free-desktop mode is not installed. Run scripts/install-macos.mjs first.\n');
+if (config.platform !== 'darwin' || config.enabled !== true) {
+  process.stderr.write('The desktop service is not installed. Run scripts/install-macos.mjs first.\n');
   process.exit(1);
 }
 if (!config.electronPath || !fs.existsSync(config.electronPath)) {
   process.stderr.write('Desktop runtime is missing. Run scripts/install-macos.mjs first.\n');
   process.exit(1);
 }
-process.stdout.write(JSON.stringify({ ok: true, platform: 'darwin', mode: config.mode, electronPath: config.electronPath }) + '\n');
+process.stdout.write(JSON.stringify({ ok: true, platform: 'darwin', electronPath: config.electronPath }) + '\n');

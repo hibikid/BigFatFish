@@ -10,7 +10,7 @@
 
 ## 安装
 
-在项目目录双击 `安装 Mac 自动跟随.command`，或运行：
+在项目目录双击 `安装 Mac 开机自启.command`，或运行：
 
 ```bash
 npm run install:mac
@@ -39,7 +39,7 @@ Codex 的受支持工具出现 `PermissionRequest` 人工审批事件时，小�
 
 - `启动桌面挂件.command`：启动或显示独立桌面挂件。
 - `停止挂件服务.command`：停止当前挂件；之后可通过启动命令恢复。
-- `停用自动跟随.command`：停止并移除 LaunchAgent，保留设置、素材和账本。
+- `停用开机自启.command`：停止并移除 LaunchAgent，保留设置、素材和账本。
 - `Cmd+Option+W`：显示/隐藏挂件。
 
 数据位于 `~/.codex/whale-widget`。源码安装在项目目录时，LaunchAgent 会直接引用该项目；如果移动目录，请重新运行安装器。
@@ -53,9 +53,10 @@ node scripts/control.mjs balance
 
 关键诊断文件：
 
-- `follow-state.json`：自由桌面模式下 `native.mode` 为 `free-desktop`。
-- `supervisor-state.json`：LaunchAgent 监督器的心跳、`mode: free-desktop` 和 Electron 子进程 PID。
+- `supervisor-state.json`：LaunchAgent 监督器的心跳和 Electron 子进程 PID；挂件停止后 PID 为空，心跳照常更新。
 - `macos-supervisor.log` 与 `macos-launchagent-error.log`：监督器和 Electron 输出。
 - `desktop-error.json`：主进程异常；成功加载界面后会自动清除旧文件。
+
+`follow-config.json`（桌面服务配置）和 `pause-until-host-exit.json`（停止标记）沿用早期跟随 Codex 窗口时的文件名。
 
 挂件不会读取窗口位置、窗口标题或聊天内容，也不需要“辅助功能”权限。

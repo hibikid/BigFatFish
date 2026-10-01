@@ -179,7 +179,7 @@ export class SessionReader {
       if (initial || info.mtime < Date.now() - 30000) {
         // Long Ultra turns can start well before the last megabyte. Bootstrap
         // the lifecycle in bounded chunks on the worker, without replaying any
-        // completions. The UI and native follower never wait for this scan.
+        // completions. The UI never waits for this scan.
         parser.priming = true;
         while (state.offset < info.size) {
           const previous = state.offset;

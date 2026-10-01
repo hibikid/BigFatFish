@@ -116,6 +116,7 @@ for ($whaleAttempt=0; $whaleAttempt -lt 60; $whaleAttempt++) {
     Start-Sleep -Milliseconds 200
 }
 if ((Get-ScheduledTask -TaskName $whaleTaskName -ErrorAction Stop).State -eq 'Running') { Stop-ScheduledTask -TaskName $whaleTaskName -ErrorAction Stop }
+# mode keeps a rollback to a version with window following in free-desktop mode.
 @{ enabled=$true; pluginRoot=$whaleRoot; electronPath=$whaleElectron; powerShellPath=$whalePowerShell; launcherPath=$whaleLauncher; taskName=$whaleTaskName; mode='free-desktop'; revision='desktop-v4-free'; launchMode='winexe-create-no-window' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $DataDir 'follow-config.json') -Encoding utf8
 $whaleStartup = Join-Path ([Environment]::GetFolderPath('Startup')) 'Codex API Balance Whale.lnk'
 if (Test-Path -LiteralPath $whaleStartup) {

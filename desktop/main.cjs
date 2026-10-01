@@ -10,17 +10,11 @@ const { pathToFileURL } = require('node:url');
 const root = path.resolve(__dirname, '..');
 const dataDir = process.argv.find(a => a.startsWith('--whale-data='))?.slice(13);
 const fixture = process.env.WHALE_DESKTOP_TEST === '1';
-// The companion normally runs as an independent desktop pet. Keep the host
-// protocol for existing follow-mode installations, but never let a missing or
-// minimized Codex window determine an independent widget's lifetime.
-const freeDesktop = process.argv.includes('--free-desktop');
-const initialHost = freeDesktop ? null : (() => { try { const h = JSON.parse(process.env.WHALE_INITIAL_HOST || 'null'); return h?.hostAlive ? h : null; } catch { return null; } })();
 const startupAt = Date.now();
 const startup = { revision: 'free-desktop-v1', requestedAt: Number(process.env.WHALE_LAUNCH_TIME) || startupAt, mainAt: startupAt, phases: {} };
 const markStartup = phase => { if (startup.phases[phase] == null) startup.phases[phase] = Date.now() - startup.requestedAt; };
 markStartup('main');
 const isMac = process.platform === 'darwin';
-const toDipRect = rect => isMac ? rect : screen.screenToDipRect(null, rect);
 // Leave device/driver safety checks to Chromium; do not bypass the GPU blocklist.
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 if (!dataDir || !path.isAbsolute(dataDir) || (!fixture && !process.argv.includes('--supervised'))) app.exit(1);
@@ -28,11 +22,9 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'whale', privileges: { standard:
 fs.mkdirSync(path.join(dataDir, 'desktop-profile'), { recursive: true });
 app.setPath('userData', path.join(dataDir, 'desktop-profile'));
 const lock = app.requestSingleInstanceLock();
-let window, tray, dispatcher, bridge, lastHost = initialHost, owner = '', appliedBounds = '', rendererReady = false, quitting = false, manuallyHidden = false, hostHeartbeat = Date.now();
+let window, tray, dispatcher, bridge, rendererReady = false, quitting = false, manuallyHidden = false;
 const rendererErrors = [];
 const fixtureOpenedLinks = [];
-let hostSequence = -1;
-let appliedNativeSize = '';
 const stateFile = path.join(dataDir, 'ui-state.json');
 const read = (f, fallback = {}) => { try { return JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, '')); } catch { return fallback; } };
 const save = (file, value) => { const temp = file + '.' + process.pid + '.tmp'; fs.writeFileSync(temp, JSON.stringify(value, null, 2)); fs.renameSync(temp, file); };
@@ -67,8 +59,7 @@ function sendCursor(force = false) {
 function setTestCursor(point) { if (fixture) { testCursor = point; sendCursor(true); } }
 function visibility() {
   if (!window || window.isDestroyed()) return;
-  const hostAllowsDisplay = lastHost?.visible && (fixture || lastHost.attached);
-  if (rendererReady && (freeDesktop || hostAllowsDisplay) && !manuallyHidden) {
+  if (rendererReady && !manuallyHidden) {
     if (!window.isVisible()) window.showInactive();
     if (startup.phases.interactive == null) {
       markStartup('interactive');
@@ -103,8 +94,6 @@ async function showStatusDialog() {
   try { provider = dispatcher?.whale?.config?.publicInfo() || {}; } catch {}
   const lines = [
     '平台：' + process.platform,
-    '运行模式：' + (freeDesktop ? '自由桌面（不绑定 Codex 窗口）' : (lastHost?.followMode || (lastHost?.nativeFollowing ? 'native' : '等待 Codex'))),
-    ...(freeDesktop ? [] : ['Codex PID：' + (lastHost?.hostPid || '未检测到')]),
     '挂件窗口：' + (window?.isVisible?.() ? '显示' : '隐藏'),
     '服务商：' + (provider.providerName || '未配置'),
     'API 地址：' + (provider.baseUrl || '未配置'),
@@ -117,27 +106,10 @@ async function showStatusDialog() {
     buttons: ['关闭'],
   });
 }
-// 0.2.0: re-assert the decision instead of relying on a single IPC message. The
-// host heartbeat already arrives every second and visibility() is idempotent, so
-// this repairs any dropped, out-of-order or zero-handle state without changing
-// the intended hide-on-minimize behaviour. The timer starts with the window.
-function assertVisibility() {
-  if (!freeDesktop && (!lastHost || lastHost.hostAlive === false)) return;
-  visibility();
-}
+// The desktop service leaves a stopped pet alone until the start command removes
+// this marker; its name dates from the retired window-follow mode.
 function pauseAndQuit() {
-  if (freeDesktop) {
-    save(path.join(dataDir, 'pause-until-host-exit.json'), { pauseAll: true, mode: 'free-desktop' });
-  } else if (isMac) {
-    save(path.join(dataDir, 'pause-until-host-exit.json'), {
-      pauseAll: true,
-      hostPid: lastHost?.hostPid || 0,
-      hostSession: lastHost?.hostSession || '',
-      hostWindow: lastHost?.window || '0',
-    });
-  } else if (lastHost?.hostPid) {
-    save(path.join(dataDir, 'pause-until-host-exit.json'), { hostPid: lastHost.hostPid });
-  }
+  save(path.join(dataDir, 'pause-until-host-exit.json'), { pauseAll: true });
   app.quit();
 }
 function isMainFrame(event) { return event.sender === window?.webContents && event.senderFrame === window.webContents.mainFrame; }
@@ -156,53 +128,6 @@ async function openWebLink(value, gestureRequired = true) {
     return true;
   } catch { return false; }
 }
-async function setHost(host) {
-  if (!host || typeof host.hostAlive !== 'boolean') return;
-  if (freeDesktop) return;
-  // 0.2.0: an older serial is stale for geometry only. The supervisor restarts
-  // its counter at 1 whenever it restarts, so dropping the whole message used to
-  // freeze the widget's visibility state forever; accept the snapshot for
-  // lifecycle, lastHost and visibility, and never apply stale bounds.
-  let staleSnapshot = false;
-  if (Number.isSafeInteger(host.serial)) {
-    if (host.serial <= hostSequence) staleSnapshot = true;
-    else hostSequence = host.serial;
-  }
-  hostHeartbeat = Date.now(); lastHost = host;
-  if (!host.hostAlive) { if (window) app.quit(); return; }
-  if (!window) return;
-  if (staleSnapshot) { visibility(); return; }
-  if (host.attached) markStartup('attached');
-  // Native events own position. Only Electron may resize its non-resizable
-  // viewport; it updates the corresponding native min/max tracking sizes.
-  if (host.nativeFollowing && host.visible && host.bounds && ['width','height','x','y'].every(k => Number.isFinite(host.bounds[k]))) {
-    const current = window.getBounds();
-    const scale = Number.isFinite(host.dpi) && host.dpi >= 96 ? host.dpi / 96 : screen.getDisplayMatching(current).scaleFactor;
-    const width = Math.round(host.bounds.width / scale), height = Math.round(host.bounds.height / scale);
-    const sizeKey = [host.window, width, height, scale].join(':');
-    // getBounds encloses fractional DIP edges and can differ by one DIP as x
-    // changes. Compare requested sizes, not that rounded result, on heartbeats.
-    if (width > 10 && height > 10 && sizeKey !== appliedNativeSize) {
-      if (width !== current.width || height !== current.height) window.setBounds({ ...current, width, height });
-      appliedNativeSize = sizeKey;
-    }
-  }
-  if (!host.nativeFollowing) appliedNativeSize = '';
-  // Stale coordinates never go through setBounds while native following runs.
-  if (!host.nativeFollowing && host.visible && host.bounds && [host.bounds.x, host.bounds.y, host.bounds.width, host.bounds.height].every(Number.isFinite)) {
-    const rect = toDipRect(host.bounds);
-    const key = JSON.stringify(rect);
-    if (rect.width > 10 && rect.height > 10 && appliedBounds !== key) {
-      const current = window.getBounds();
-      if (rect.width !== current.width || rect.height !== current.height) window.setBounds(rect);
-      else window.setPosition(rect.x, rect.y);
-      appliedBounds = key; sendCursor(true);
-    }
-  }
-  owner = host.window || '';
-  visibility();
-}
-
 async function importLegacyStorage() {
   const marker = path.join(dataDir, 'legacy-storage-imported.json');
   if (fs.existsSync(marker) || fixture) return;
@@ -227,7 +152,7 @@ else {
     const secretVault = new KeychainVault({ dataDir, safeStorage });
     dispatcher = createDispatcher({ dataDir, secretVault, fetchImpl: (url, options) => net.fetch(url, options), onStop: pauseAndQuit, onShow: show,
       onChatNotice: notice => { if (notice.kind === 'pomodoro') show(); },
-      statusInfo: () => ({ followCodex: !freeDesktop, freeDesktop, platform: process.platform, followMode: freeDesktop ? 'free-desktop' : (lastHost?.followMode || null), hostPid: freeDesktop ? null : (lastHost?.hostPid || null), visible: !!window?.isVisible(), nativeFollowing: freeDesktop ? false : !!lastHost?.nativeFollowing, startup, rendering: gpuStatus }), ...testOptions });
+      statusInfo: () => ({ platform: process.platform, visible: !!window?.isVisible(), startup, rendering: gpuStatus }), ...testOptions });
     markStartup('dispatcherReady');
     await importLegacyStorage();
     session.defaultSession.protocol.handle('whale', async request => {
@@ -236,9 +161,7 @@ else {
       const result = await dispatcher.dispatch(url.pathname + url.search, { method: request.method, body: ['GET', 'HEAD'].includes(request.method) ? null : Buffer.from(await request.arrayBuffer()), headers: Object.fromEntries(request.headers), signal: request.signal });
       return new Response(request.method === 'HEAD' ? null : result.body, { status: result.status, headers: result.headers });
     });
-    const firstBounds = freeDesktop ? null : initialHost?.bounds;
-    const area = firstBounds && ['x','y','width','height'].every(k => Number.isFinite(firstBounds[k])) && firstBounds.width > 10 && firstBounds.height > 10
-      ? toDipRect(firstBounds) : (freeDesktop ? desktopArea(screen) : null) || screen.getPrimaryDisplay().workArea;
+    const area = desktopArea(screen) || screen.getPrimaryDisplay().workArea;
     // WS_EX_TOOLWINDOW keeps the large transparent overlay out of Chromium's
     // native occlusion calculation even while its opaque pixels accept clicks.
     // Keep normal activation: Chromium's non-client handler consumes the first
@@ -248,28 +171,23 @@ else {
       if (app.dock) app.dock.hide();
       window.setAlwaysOnTop(true, 'floating', 1);
       window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
-    } else if (freeDesktop) window.setAlwaysOnTop(true, 'floating');
+    } else window.setAlwaysOnTop(true, 'floating');
     markStartup('windowCreated');
     window.once('ready-to-show', () => markStartup('frameReady'));
     if (fixture) window.webContents.on('console-message', (_event, ...args) => { const d = args[0]; if (typeof d === 'object' ? d.level === 'error' : d === 3) rendererErrors.push(typeof d === 'object' ? d.message : args[1]); });
-    if (!fixture) process.stdout.write(JSON.stringify({ overlayHandle: window.getNativeWindowHandle().readBigUInt64LE().toString() }) + '\n');
     window.setIgnoreMouseEvents(true, { forward: true });
     window.on('show', () => { invalidate(); sendCursor(true); });
     window.on('resize', invalidate);
-    let syncDesktop = null, testViewport = false;
-    if (freeDesktop) {
-      const syncBounds = desktopBoundsSync(screen, window);
-      syncDesktop = () => { if (!testViewport && syncBounds()) { invalidate(); sendCursor(true); } };
-      for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) screen.on(event, syncDesktop);
-      app.once('will-quit', () => {
-        for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) screen.off(event, syncDesktop);
-      });
-    }
-    // 0.2.0: an un-minimize, a restore from the taskbar or a re-show must land on
-    // the same visibility decision immediately rather than waiting for the next
-    // supervisor sample.
-    window.on('restore', assertVisibility);
-    window.on('show', assertVisibility);
+    let testViewport = false;
+    const syncBounds = desktopBoundsSync(screen, window);
+    const syncDesktop = () => { if (!testViewport && syncBounds()) { invalidate(); sendCursor(true); } };
+    const displayEvents = ['display-added', 'display-removed', 'display-metrics-changed'];
+    for (const event of displayEvents) screen.on(event, syncDesktop);
+    app.once('will-quit', () => { for (const event of displayEvents) screen.off(event, syncDesktop); });
+    // Restoring or showing the window from outside the pet lands on the user's
+    // choice at once; the watchdog below re-applies it every second.
+    window.on('restore', visibility);
+    window.on('show', visibility);
     // A dead renderer would otherwise leave rendererReady false forever, because
     // until 0.2.0 nothing observed the crash.
     window.webContents.on('render-process-gone', (_event, details) => {
@@ -312,11 +230,11 @@ else {
       if (event.sender === window.webContents && typeof editing === 'boolean') setKeyboardFocus(editing);
     });
     const cursorPoll = setInterval(sendCursor, 50);
-    visibilityWatchdog = setInterval(() => { syncDesktop?.(); assertVisibility(); }, 1000);
-    if (visibilityWatchdog.unref) visibilityWatchdog.unref();
-    app.once('will-quit', () => { clearInterval(cursorPoll); clearInterval(visibilityWatchdog); visibilityWatchdog = null; });
+    const visibilityWatchdog = setInterval(() => { syncDesktop(); visibility(); }, 1000);
+    visibilityWatchdog.unref?.();
+    app.once('will-quit', () => { clearInterval(cursorPoll); clearInterval(visibilityWatchdog); });
     const icon = nativeImage.createFromPath(path.join(root, 'assets', 'DSniang1.png')).resize({ width: 24, height: 24 });
-    tray = new Tray(icon); tray.setToolTip(freeDesktop ? 'API 余额小鲸鱼 · 自由桌面' : 'API 余额小鲸鱼 · 跟随 Codex');
+    tray = new Tray(icon); tray.setToolTip('API 余额小鲸鱼');
     const chatShortcutAvailable = isMac && globalShortcut.register('Control+0', openChatShortcut);
     const trayTemplate = [{ label: '显示 / 隐藏小鲸鱼', click: toggle }];
     if (isMac) {
@@ -332,27 +250,25 @@ else {
     } else {
       trayTemplate.push({ label: 'API 设置', click: () => { show(); window.webContents.send('whale-settings'); } });
     }
-    trayTemplate.push({ type: 'separator' }, { label: freeDesktop ? '停止挂件（可从启动命令恢复）' : '本次退出挂件（下次打开 Codex 恢复）', click: pauseAndQuit });
+    trayTemplate.push({ type: 'separator' }, { label: '停止挂件（可从启动命令恢复）', click: pauseAndQuit });
     tray.setContextMenu(Menu.buildFromTemplate(trayTemplate));
     tray.on('double-click', toggle); globalShortcut.register(isMac ? 'Command+Option+W' : 'Control+Alt+W', toggle);
-    bridge = await startBridge(dispatcher, { dataDir, onHost: setHost, onApprovalRequest: notifyApprovalRequest });
+    bridge = await startBridge(dispatcher, { dataDir, onApprovalRequest: notifyApprovalRequest });
     markStartup('bridgeReady');
     await window.loadURL(UI_ORIGIN + '/widget.html');
     markStartup('pageLoaded');
-    if (lastHost) await setHost(lastHost);
     if (fixture) {
       const fixtureModule = process.env.WHALE_DESKTOP_AUDIT === '1' ? 'desktop-audit-fixture.mjs' : 'desktop-fixture.mjs';
       const { verifyDesktop } = await import(pathToFileURL(path.join(root, 'tests', fixtureModule)));
-      await verifyDesktop({ app, window, screen, setHost, setTestCursor, setTestViewport: bounds => { testViewport = !!bounds; if (bounds) window.setBounds(bounds); else syncDesktop?.(); }, dispatcher, dataDir, errors: rendererErrors, openedLinks: fixtureOpenedLinks, activateChatShortcut: openChatShortcut, chatShortcutAvailable, renderInfo: () => ({ gpuStatus, presents, inputEnabled, keyboardFocus }) });
+      await verifyDesktop({ app, window, screen, setTestCursor, setTestViewport: bounds => { testViewport = !!bounds; if (bounds) window.setBounds(bounds); else syncDesktop(); }, dispatcher, dataDir, errors: rendererErrors, openedLinks: fixtureOpenedLinks, activateChatShortcut: openChatShortcut, chatShortcutAvailable, renderInfo: () => ({ gpuStatus, presents, inputEnabled, keyboardFocus }) });
     }
-    else if (!freeDesktop) { const heartbeat = setInterval(() => { if (Date.now() - hostHeartbeat > 6000) app.quit(); }, 2000); app.once('will-quit', () => clearInterval(heartbeat)); }
   }).catch(error => { try { save(path.join(dataDir, 'desktop-error.json'), { message: String(error.message).slice(0, 350), at: new Date().toISOString() }); } catch {} app.exit(1); });
   app.on('window-all-closed', () => { if (!quitting && rendererReady) app.quit(); });
   app.on('before-quit', event => {
     event.preventDefault();
     if (quitting) return;
     quitting = true;
-    // Do not leave an unresponsive input surface over Codex while saving state.
+    // Do not leave an unresponsive input surface over the desktop while saving state.
     try { if (window && !window.isDestroyed()) { window.setIgnoreMouseEvents(true); window.hide(); } } catch {}
     let finished = false;
     const finish = () => {

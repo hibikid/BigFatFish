@@ -17,7 +17,7 @@ body:
     attributes:
       label: 你装的是哪一个？
       options:
-        - Codex 桌面版 api-balance-whale（本分支，跟随 Codex 窗口）
+        - Codex 桌面版 api-balance-whale（本分支，独立桌面宠物）
         - DSH 网页版 dsh-whale-widget（上游主分支）
         - 不确定
     validations:
@@ -28,8 +28,7 @@ body:
       label: 出问题的部分
       options:
         - 安装 / 启动（计划任务、启动器、无窗口启动）
-        - 鲸鱼不出现 / 消失 / 位置与跟随
-        - 最小化或另存为之后消失
+        - 鲸鱼不出现 / 消失 / 位置
         - 余额查询（接口、provider、密钥来源）
         - 汇率与显示币种（含"刷新汇率"与 ! 说明）
         - 气泡与每轮消耗提示（含失败 / 暂停取消提示）
@@ -75,7 +74,7 @@ body:
       label: 诊断文件（脱敏后粘贴或作为附件）
       description: |
         数据目录（macOS 为 `~/.codex/whale-widget`，Windows 为 `%USERPROFILE%\.codex\whale-widget`）下这几个文件通常足够定位：
-        `follow-state.json`、`startup-timings.json`；
+        `supervisor-state.json`、`startup-timings.json`；
         崩溃类问题再加 `renderer-gone.json` / `desktop-error.json` / `supervisor-error.json` / `launcher-error.json`。
         **不要上传 `runtime.json`，其中包含本地 IPC token。** 可用 `node scripts/control.mjs status` 直接输出状态。
       render: text
