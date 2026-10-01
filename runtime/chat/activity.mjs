@@ -5,8 +5,12 @@ import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodo
 const DEFAULTS = { enabled: false, start: '09:00', end: '21:00', minMinutes: 45, maxMinutes: 90, dailyLimit: 3 };
 const FALLBACK = { completed: '这轮专注完成了，辛苦啦。', await_break: '专注时间到了，准备休息一下吧。', await_focus: '休息时间到了，准备开始下一轮专注吧。' };
 const minute = value => { const match = /^(\d\d):(\d\d)$/.exec(value); return match && +match[1] < 24 && +match[2] < 60 ? +match[1] * 60 + +match[2] : null; };
-// An unreadable file is treated as missing; the next save replaces it.
-const readOrDefault = (file, fallback) => { try { return readJson(file, fallback); } catch { return structuredClone(fallback); } };
+// A file that cannot be read, or does not hold an object, is treated as missing; the next save replaces it.
+function readOrDefault(file, fallback) {
+  let value = null;
+  try { value = readJson(file, fallback); } catch {}
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : structuredClone(fallback);
+}
 
 // Keeps a generated reply that still applies: commits it to history when the
 // generator supports that, and yields null if there is no text or the commit fails.

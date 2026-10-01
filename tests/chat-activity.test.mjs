@@ -301,16 +301,20 @@ test('a background reply that became stale while generating is neither shown nor
 });
 
 test('unreadable activity files fall back to a stopped timer and default settings instead of disabling chat', async t => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-activity-corrupt-'));
-  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dataDir, 'chat-activity.json'), '{"enabled": tru');
-  fs.writeFileSync(path.join(dataDir, 'chat-activity-state.json'), '\u0000\u0000');
-  const service = new ChatService({ dataDir, activityOptions: { startTimer: false } });
-  t.after(() => service.close());
-  const response = await service.dispatch(new URL('http://local/api/chat/activity'), { method: 'GET' });
-  assert.equal(response.status, 200);
-  const body = JSON.parse(response.body);
-  assert.equal(body.pomodoro.phase, 'idle'); assert.equal(body.settings.enabled, false); assert.deepEqual(body.notices, []);
-  assert.equal(service.activity.tool(tool('pomodoro_set', { focusMinutes: 25, breakMinutes: 5, cycles: 1 }), 'chat_1').ok, true, 'the next save replaces the unreadable state');
-  assert.equal(new ChatActivity({ dataDir, startTimer: false }).snapshot().pomodoro.phase, 'focus');
+  // Garbled bytes, and valid JSON that does not hold an object.
+  for (const [settings, state] of [['{"enabled": tru', '\u0000\u0000'], ['null', 'null'], ['[]', '"text"']]) {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-activity-corrupt-'));
+    t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(dataDir, 'chat-activity.json'), settings);
+    fs.writeFileSync(path.join(dataDir, 'chat-activity-state.json'), state);
+    const service = new ChatService({ dataDir, activityOptions: { startTimer: false } });
+    t.after(() => service.close());
+    const response = await service.dispatch(new URL('http://local/api/chat/activity'), { method: 'GET' });
+    assert.equal(response.status, 200, state);
+    const body = JSON.parse(response.body);
+    assert.equal(body.pomodoro.phase, 'idle'); assert.equal(body.settings.enabled, false); assert.deepEqual(body.notices, []);
+    assert.equal(body.settings.start, '09:00', 'settings that are not an object are ignored whole');
+    assert.equal(service.activity.tool(tool('pomodoro_set', { focusMinutes: 25, breakMinutes: 5, cycles: 1 }), 'chat_1').ok, true, 'the next save replaces the unreadable state');
+    assert.equal(new ChatActivity({ dataDir, startTimer: false }).snapshot().pomodoro.phase, 'focus');
+  }
 });
