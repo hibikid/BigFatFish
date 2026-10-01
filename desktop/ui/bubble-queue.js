@@ -53,7 +53,13 @@
       if (current && current.kind !== 'approval') queue.unshift(current);
       open({ ...item, kind: 'approval', ttlMs: 0 });
     }
-    function clear() {
+    // Drops every bubble, or only those of one kind; one of that kind on screen is dismissed.
+    function clear(kind) {
+      if (kind) {
+        queue = queue.filter(item => item.kind !== kind);
+        if (current && current.kind === kind) dismiss();
+        return;
+      }
       queue = []; current = null; epoch++;
       stop();
       if (batch) cancel(batch);

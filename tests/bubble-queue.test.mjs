@@ -86,3 +86,24 @@ test('clearing drops queued and showing bubbles, and ignores their late results'
   assert.equal(queue.current(), null);
   assert.deepEqual(log, ['show a']);
 });
+
+test('clearing one kind drops it from the queue and the screen, and keeps the others', async () => {
+  const { queue, log, elapse, draw } = harness();
+  queue.push({ id: 'cost', kind: 'cost', rank: 3, ttlMs: 5000 });
+  await elapse(30); await draw();
+  queue.approval({ id: 'approve' });
+  await draw();
+  queue.push({ id: 'later-cost', kind: 'cost', rank: 3, ttlMs: 5000 });
+  queue.push({ id: 'alert', kind: 'alert', ttlMs: 6500 });
+  await elapse(30);
+  queue.clear('cost');
+  assert.equal(queue.current().kind, 'approval', 'a bubble of another kind stays on screen');
+  queue.dismiss(); await draw();
+  assert.deepEqual(log, ['show cost', 'show approve', 'show alert'], 'neither the interrupted nor the queued cost bubble returns');
+
+  queue.push({ id: 'last-cost', kind: 'cost', rank: 3, ttlMs: 5000 });
+  await elapse(6500); await draw();
+  queue.clear('cost');
+  assert.equal(queue.current(), null);
+  assert.deepEqual(log.slice(-2), ['show last-cost', 'hide'], 'a cost bubble on screen closes');
+});

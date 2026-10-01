@@ -9427,7 +9427,7 @@
       turnCostToggle.checked = turnCostOn;
       turnCostCloseInput.disabled = !turnCostOn;
       saveConfig();
-      if (!turnCostOn && bubbleQueue.current() && bubbleQueue.current().kind === 'cost') bubbleQueue.dismiss();
+      if (!turnCostOn) bubbleQueue.clear('cost');
     }
     function setTurnCostClose(v) {
       if (!turnCostOn) return;
