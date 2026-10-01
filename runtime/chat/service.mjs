@@ -92,7 +92,7 @@ export class ChatService {
       const history = !includeHistory ? [] : kind === 'proactive' ? this.conversations.allTurns().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(-12) :
         this.conversations.items.find(item => item.id === conversationId)?.turns || [];
       const reply = await this.reply(settings, key, { instruction: BACKGROUND_INSTRUCTION, history, prompt, id, signal: controller.signal,
-        timeoutMs: Math.min(kind === 'pomodoro' ? 8000 : 30000, this.timeoutMs), maxChars: MAX_REPLY_CHARS });
+        timeoutMs: Math.min(30000, this.timeoutMs), maxChars: MAX_REPLY_CHARS });
       const text = reply.text.trim();
       if (reply.status !== 'completed' || !text) return null;
       return { text, commit: () => {

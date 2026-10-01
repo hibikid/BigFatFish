@@ -249,6 +249,21 @@ test('proactive chat and Pomodoro reminders use their own reply length, not the 
   assert.equal(reminder?.text, long);
 });
 
+test('a Pomodoro reminder waits up to 30 seconds for the model, like proactive chat', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-reminder-wait-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  let respond = null;
+  const service = new ChatService({ dataDir, activityOptions: { startTimer: false }, fetchImpl: () => new Promise(resolve => { respond = resolve; }) });
+  t.after(() => service.close());
+  service.save({ baseUrl: 'https://chat.example.test/v1', model: 'dsv4.1flash', apiKey: 'synthetic-key', persona: '你是大肥鱼', maxTokens: 256 });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const reminder = service.reminder({ phase: 'await_break', cycle: 1, cycles: 2, focusMinutes: 25, breakMinutes: 5 });
+  while (!respond) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(29000);
+  respond(sse([{ choices: [{ index: 0, delta: { content: '该休息啦' } }] }, { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage }]));
+  assert.equal((await reminder)?.text, '该休息啦');
+});
+
 test('a background reply that became stale while generating is neither shown nor kept in conversation history, but is still billed', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-stale-reply-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
