@@ -170,7 +170,7 @@ export class WhaleService {
     const records = this.ledger.records(scope);
     if (activate && this.isDisplayBalanceContext(c)) this.activeScope = scope;
     const sourceDailyUsage = Number.isFinite(payload.sourceDailyUsage) ? payload.sourceDailyUsage : null;
-    return { ...payload, todayUsage: sourceDailyUsage === null ? records.today.total : sourceDailyUsage,
+    return { ...payload, balanceFull: records.fullBalance, todayUsage: sourceDailyUsage === null ? records.today.total : sourceDailyUsage,
       todayUsageSource: sourceDailyUsage === null ? 'ledger' : 'source-api', observedSince: records.today.since,
       usageMode: sourceDailyUsage === null ? 'ledger' : 'source-api', usageNote: records.note };
   }

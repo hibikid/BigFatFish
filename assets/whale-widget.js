@@ -73,6 +73,7 @@
     styleEl.textContent += '\n.dshwv-fxicon:hover{background:rgba(32,49,112,.20);color:#203170}';
     styleEl.textContent += '\n.dshwv-fxicon:focus-visible{outline:2px solid rgba(32,49,112,.55);outline-offset:1px}';
     styleEl.textContent += '\n.dshwv-fxinfo{position:fixed;z-index:27000;max-width:min(320px,calc(100vw - 16px));box-sizing:border-box;background:#fff;border:1px solid rgba(32,49,112,.35);border-radius:8px;box-shadow:0 6px 16px rgba(0,0,0,.16);padding:8px 10px;color:#203170;font-size:11px;line-height:1.5;text-align:left;white-space:pre-line;pointer-events:auto;color-scheme:light}';
+    styleEl.textContent += '\n.dshwv-meter{position:absolute;right:0;top:100%;width:59.45%;box-sizing:border-box;padding:3px 10% 0;display:flex;flex-direction:column;gap:3px;pointer-events:none;font:700 clamp(8px,calc(var(--dshw-base) * .04),13px)/1 system-ui,sans-serif;color:#2f5556;text-shadow:0 0 2px #fff,0 0 2px #fff}.dshwv-meter[hidden]{display:none}.dshwv-root.dshwv-left .dshwv-meter{transform:scaleX(-1)}.dshwv-meter-inside .dshwv-meter{top:auto;bottom:2px;padding-top:0}.dshwv-meter-row{display:flex;align-items:center;gap:4px}.dshwv-meter-track{flex:1;height:clamp(4px,calc(var(--dshw-base) * .022),8px);border-radius:4px;background:rgba(255,255,255,.8);box-shadow:inset 0 0 0 1px rgba(47,85,86,.35);overflow:hidden}.dshwv-meter-fill{height:100%;border-radius:4px;background:#3fb68b}.dshwv-meter-warn .dshwv-meter-fill{background:#e0a32e}.dshwv-meter-low .dshwv-meter-fill{background:#e05a4f}';
     styleEl.textContent += '\n.dshwv-source-switch{display:flex;flex:1;min-width:0;border:1px solid #badbdc;border-radius:6px;overflow:hidden}.dshwv-source-switch button{flex:1;min-width:0;border:0;background:#fff;color:#356a6c;padding:5px 8px;font-size:12px}.dshwv-source-switch button[aria-pressed="true"]{background:#146b70;color:#fff}.dshwv-source-switch button:focus-visible{outline:2px solid #146b70;outline-offset:-2px}';
     document.head.appendChild(styleEl);
     var root = document.createElement('div');
@@ -7922,6 +7923,12 @@
     body.className = 'dshwv-body';
     body.appendChild(img);
     body.appendChild(bubbleBox);
+    // Usage meter: remaining 5h and 7d quota, or what is left of the API balance.
+    var meterBox = document.createElement('div');
+    meterBox.className = 'dshwv-meter';
+    meterBox.hidden = true;
+    body.appendChild(meterBox);
+    var meterKey = '';
     root.appendChild(body);
     root.appendChild(menuBtn);
     document.body.appendChild(positioner);
@@ -9186,6 +9193,7 @@
       if (!view) return false;
       var changed = WhaleUsagePresentation.subscriptionFingerprint(state.subscription) !== WhaleUsagePresentation.subscriptionFingerprint(subscription);
       Object.assign(state, view.state);
+      renderUsageMeters();
       root.title = view.title;
       img.alt = view.alt;
       if (changed) {
@@ -9204,9 +9212,43 @@
         }
       }).catch(function () {});
     }
+    function renderUsageMeters() {
+      try {
+        var meters = WhaleUsagePresentation.usageMeters(state);
+        var key = JSON.stringify(meters);
+        if (key === meterKey) return;
+        meterKey = key;
+        meterBox.textContent = '';
+        meters.forEach(function (meter) {
+          var row = document.createElement('div');
+          row.className = 'dshwv-meter-row dshwv-meter-' + meter.level;
+          var label = document.createElement('span');
+          label.textContent = meter.label;
+          var track = document.createElement('div');
+          track.className = 'dshwv-meter-track';
+          var fill = document.createElement('div');
+          fill.className = 'dshwv-meter-fill';
+          fill.style.width = meter.percent + '%';
+          track.appendChild(fill);
+          row.appendChild(label);
+          row.appendChild(track);
+          meterBox.appendChild(row);
+        });
+        meterBox.hidden = !meters.length;
+        placeUsageMeters();
+        WhaleRendering.presentFor(200);
+      } catch (err) {}
+    }
+    // Under the pet when there is room; inside the bottom of its image at the screen edge.
+    function placeUsageMeters() {
+      if (!meterBox || meterBox.hidden) return;
+      var h = root.offsetHeight || root.getBoundingClientRect().height || 0;
+      root.classList.toggle('dshwv-meter-inside', state.top + h + meterBox.offsetHeight + 2 > viewport().h);
+    }
     function express() {
       positioner.style.transform = 'translate3d(' + state.left + 'px,' + state.top + 'px,0)';
       root.classList.toggle('dshwv-left', !!state.flip);
+      placeUsageMeters();
       WhaleRendering.presentFor(drag && drag.active ? 0 : 200);
     }
     function settle() {
@@ -9307,6 +9349,7 @@
       syncSourceButtons();
       state.subscription = null; state.balance = null; state.balanceText = ''; state.todayUsage = null;
       state.status = 'loading'; state.message = '';
+      renderUsageMeters();
       root.title = source === 'claude' ? 'Claude 订阅额度 · 等待更新' : 'Codex 用量';
       refreshOpenNormalBubble();
       if (busy) refreshQueued = true; else refresh(false);
@@ -9358,6 +9401,7 @@
         }
       }).finally(function () {
         busy = false;
+        renderUsageMeters();
         if (refreshQueued) { refreshQueued = false; refresh(false); }
       });
     }

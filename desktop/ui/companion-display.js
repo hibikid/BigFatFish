@@ -19,10 +19,18 @@ export function createCompanionDisplay({ pet, composer, reply, content, timer })
     timer.style.left = clamp(chosen.left, 8, width - w - 8) + 'px';
     timer.style.top = clamp(chosen.top, 8, height - h - 8) + 'px';
   }
+  // The pet with the usage meter under it, so chat and the timer keep clear of both.
+  function petBounds() {
+    const image = pet.getBoundingClientRect(), meter = pet.closest('.dshwv-root')?.querySelector('.dshwv-meter');
+    if (!meter || meter.hidden) return image;
+    const box = meter.getBoundingClientRect();
+    const left = Math.min(image.left, box.left), top = Math.min(image.top, box.top), right = Math.max(image.right, box.right), bottom = Math.max(image.bottom, box.bottom);
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  }
   function position() {
     scheduled = false;
     if (destroyed) return;
-    const bounds = pet.getBoundingClientRect(), width = window.innerWidth, height = window.innerHeight;
+    const bounds = petBounds(), width = window.innerWidth, height = window.innerHeight;
     if (!opened && !notice) { placeTimer(bounds, width, height); return; }
     const bottomSpace = composer.offsetHeight + 12;
     if (bounds.bottom + bottomSpace > height - 8 && bounds.top > 8 && bounds.bottom !== lastMoveBottom) {

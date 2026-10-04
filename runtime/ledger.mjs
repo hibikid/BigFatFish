@@ -3,6 +3,9 @@ import path from 'node:path';
 import { readJson, writeJson, dayKey, rounded } from './paths.mjs';
 
 const initialLedger = () => ({ version: 1, date: '', observed: 0, firstObservation: null, lastObservation: null, history: {}, events: [] });
+// The full balance is the highest balance since the last top-up. A rise of more
+// than this share of it counts as a top-up; a smaller one, such as a refund, does not.
+const TOP_UP_SHARE = 0.01;
 const emptySessionSummary = () => ({ tokens: 0, turns: 0, amounts: new Map() });
 const addAmount = (summary, currency, value) => {
   if (!/^[A-Z]{3}$/.test(currency || '') || !Number.isFinite(value)) return;
@@ -38,10 +41,14 @@ export class UsageLedger {
     const meterKey = typeof sample.meterKey === 'string' && /^[a-f0-9]{64}$/.test(sample.meterKey) ? sample.meterKey : null;
     // A newer reading can legitimately reset to zero. Ordering is handled by
     // the service, while a changed adapter/scale starts a new meter baseline.
-    if (last && (!meterKey || !last.meterKey || last.meterKey === meterKey)) {
+    const sameMeter = !!last && (!meterKey || !last.meterKey || last.meterKey === meterKey);
+    if (sameMeter) {
       if (used !== null && last.used !== null && used >= last.used) delta = used - last.used;
       else if (used === null && last.used === null && balance !== null && last.balance !== null) delta = Math.max(0, last.balance - balance);
     }
+    const full = sameMeter && Number.isFinite(led.fullBalance) ? led.fullBalance : null;
+    if (balance !== null && (full === null || balance > full || last.balance !== null && balance - last.balance > full * TOP_UP_SHARE)) led.fullBalance = balance;
+    else if (!sameMeter) led.fullBalance = null;
     led.observed = rounded(led.observed + delta);
     led.firstObservation ||= now;
     led.lastObservation = { balance, used, at: now, ...(meterKey ? { meterKey } : {}) };
@@ -88,6 +95,7 @@ export class UsageLedger {
     const days = [...new Set([today, ...Object.keys(led.history), ...led.events.map(e => e.day)])].sort().reverse();
     const missingSummaryDays = days.filter(date => totalDay(date) === null);
     return { ok: true, today: { total: led.observed, models: modelsFor(today), since: led.firstObservation }, days7,
+      fullBalance: Number.isFinite(led.fullBalance) ? led.fullBalance : null,
       total7: rounded(days7.reduce((n, d) => n + (d.total || 0), 0)),
       total7Complete: days7.every(d => d.total !== null),
       all: { days: days.map(date => ({ date, total: totalDay(date), totalState: totalDay(date) === null ? 'unknown' : 'observed', models: modelsFor(date) })),

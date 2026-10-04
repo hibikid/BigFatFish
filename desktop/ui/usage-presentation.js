@@ -10,6 +10,10 @@
     const formatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 });
     return formatter.format(Number(value.used)) + '/' + formatter.format(Number(value.limit));
   }
+  function limitOf(value) {
+    const used = Number(value?.used), limit = Number(value?.limit);
+    return value && Number.isFinite(used) && limit > 0 ? { used, limit } : null;
+  }
   function balance(data) {
     if (!data?.ok) return { state: { status: 'error', message: data?.error ? String(data.error) : '获取失败' } };
     return {
@@ -19,6 +23,7 @@
         message: '', todayUsage: data.todayUsage !== undefined ? data.todayUsage : null,
         todayUsageSource: data.todayUsageSource || 'ledger', unlimited: !!data.unlimited,
         providerName: data.providerName || '', balanceScope: data.balanceScope || '', stale: !!data.stale, status: 'ok',
+        quota: limitOf(data.primaryRateLimit), balanceFull: Number(data.balanceFull) > 0 ? Number(data.balanceFull) : null,
       },
       title: (data.providerName || '') + ' · ' + (data.balanceLabel || 'API 可用余额') + (data.stale ? '（上次成功数据）' : ''),
       alt: '当前 API 余额',
@@ -91,5 +96,22 @@
         (notice.costState === 'pending' ? '等待账单确认' : notice.costState === 'unknown' ? '以服务商账单为准' :
           notice.costState === 'estimated' ? '配置价格估算' : '同密钥区间观测') };
   }
-  return Object.freeze({ balance, hasBalance, hasSubscription, subscription, subscriptionFingerprint, quotaLines, balanceRow, balanceBubble, taskBubble });
+  // The bars under the pet, as remaining shares from 0 to 100: one per known
+  // subscription window, or one for the API key quota left, else the balance
+  // against the full balance (the highest since the last top-up).
+  function usageMeters(value) {
+    const meter = (label, percent) => {
+      const clamped = Math.max(0, Math.min(100, percent));
+      return { label, percent: clamped, level: clamped < 20 ? 'low' : clamped < 50 ? 'warn' : 'ok' };
+    };
+    if (hasSubscription(value?.subscription)) {
+      return [['5h', value.subscription.fiveHour], ['7d', value.subscription.sevenDay]]
+        .filter(([, window]) => Number.isFinite(Number(window?.remainingPercent))).map(([label, window]) => meter(label, Number(window.remainingPercent)));
+    }
+    if (value?.status !== 'ok' || value.unlimited) return [];
+    if (value.quota) return [meter('余额', (value.quota.limit - value.quota.used) / value.quota.limit * 100)];
+    if (Number.isFinite(value.balance) && value.balanceFull > 0) return [meter('余额', value.balance / value.balanceFull * 100)];
+    return [];
+  }
+  return Object.freeze({ balance, hasBalance, usageMeters, hasSubscription, subscription, subscriptionFingerprint, quotaLines, balanceRow, balanceBubble, taskBubble });
 });

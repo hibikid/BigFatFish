@@ -136,6 +136,10 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
   for (let i = 0; !window.isVisible() && i < 150; i++) await delay(100);
   assert.ok(window.isVisible(), 'free desktop should be visible without a Codex window');
   await js('window.__whaleRenderTest.place(300, 300, false)');
+  const meterRows = "[...document.querySelectorAll('.dshwv-meter:not([hidden]) .dshwv-meter-row')].map(row => row.textContent + ':' + row.querySelector('.dshwv-meter-fill').style.width)";
+  await until(`JSON.stringify(${meterRows}) === '["余额:100%"]'`, 'the API balance meter is not full at the first balance seen');
+  assert.ok(await js("document.querySelector('.dshwv-meter').getBoundingClientRect().top >= document.querySelector('.dshwv-img').getBoundingClientRect().bottom - 1"), 'the meter must sit under the pet');
+  passed.push('a usage meter under the pet shows the API balance against the full balance');
   // Observe browser audio requests without playing sounds on the developer desktop.
   await js('window.__playedAudio = []; HTMLMediaElement.prototype.play = function () { window.__playedAudio.push(this.src); return Promise.resolve(); }; undefined;');
   passed.push('free desktop loads visible assets and balance without Codex');
@@ -199,6 +203,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
   } else {
     await click('.dshwv-img', 'right');
     await until("document.activeElement === document.getElementById('chat-input') && !document.getElementById('chat-composer').hidden", 'right click did not open and focus composer');
+    assert.equal(await js("document.getElementById('chat-composer').getBoundingClientRect().top >= document.querySelector('.dshwv-meter').getBoundingClientRect().bottom"), true, 'composer should clear the usage meter');
     assert.equal(await js("document.getElementById('chat-composer').getBoundingClientRect().top >= document.querySelector('.dshwv-img').getBoundingClientRect().bottom"), true, 'composer should be below pet');
     await js("document.getElementById('chat-open-settings').click()");
     await until("document.getElementById('chat-settings').open", 'chat settings did not open');
@@ -380,6 +385,8 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     dispatcher.whale.updateSubscriptionRateLimitContext({ observedAt: now, usesSubscription: true });
     await js('window.__whaleRenderTest.refresh(true)');
     await until("document.querySelector('.dshwv-root').title.includes('Codex 订阅额度')", 'subscription did not replace API display');
+    await until(`JSON.stringify(${meterRows}) === '["5h:75%","7d:40%"]'`, 'the meter did not switch to the 5h and 7d quota');
+    passed.push('the usage meter shows remaining 5h and 7d quota for a subscription');
     saveClaudeUsage(dataDir, { rate_limits: { five_hour: { used_percentage: 20, resets_at: Math.floor(now / 1000) + 3600 },
       seven_day: { used_percentage: 65, resets_at: Math.floor(now / 1000) + 86400 } } }, now);
     window.webContents.reload();
