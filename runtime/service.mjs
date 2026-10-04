@@ -4,19 +4,8 @@ import { ConfigStore } from './config.mjs';
 import { BalanceProvider } from './providers.mjs';
 import { UsageLedger, usageDefaults } from './ledger.mjs';
 import { readJson, writeJson, rounded } from './paths.mjs';
-import { TurnJournal, safeSample, safeSubscriptionRateLimits, safeTurn, safeUsage } from './turn-journal.mjs';
-
-function publicQuota(window) {
-  return { usedPercent: window.usedPercent, remainingPercent: Math.max(0, Math.min(100, 100 - window.usedPercent)),
-    windowMinutes: window.windowMinutes, resetsAt: new Date(window.resetsAt).toISOString() };
-}
-
-function publicSubscriptionRateLimits(value, now = Date.now()) {
-  const snapshot = safeSubscriptionRateLimits(value);
-  if (!snapshot || snapshot.fiveHour.resetsAt <= now || snapshot.sevenDay.resetsAt <= now) return null;
-  return { planType: snapshot.planType, observedAt: new Date(snapshot.observedAt).toISOString(),
-    fiveHour: publicQuota(snapshot.fiveHour), sevenDay: publicQuota(snapshot.sevenDay) };
-}
+import { TurnJournal, safeSample, safeTurn, safeUsage } from './turn-journal.mjs';
+import { codexSnapshot, publicCodexSnapshot } from './quota/windows.mjs';
 
 function safeSubscriptionRateLimitContext(value) {
   const observedAt = Number(value?.observedAt);
@@ -34,7 +23,7 @@ export class WhaleService {
     this.lastFile = path.join(this.config.dataDir, 'last-turn.json');
     this.usageSettingsFile = path.join(this.config.dataDir, 'usage-settings.json');
     this.subscriptionRateLimitsFile = path.join(this.config.dataDir, 'subscription-rate-limits.json');
-    this.subscriptionRateLimitsCache = safeSubscriptionRateLimits(readJson(this.subscriptionRateLimitsFile, null));
+    this.subscriptionRateLimitsCache = codexSnapshot(readJson(this.subscriptionRateLimitsFile, null));
     this.subscriptionRateLimitContextFile = path.join(this.config.dataDir, 'subscription-rate-limit-context.json');
     this.subscriptionRateLimitContext = safeSubscriptionRateLimitContext(readJson(this.subscriptionRateLimitContextFile, null));
     this.activeScope = null; this.displaySourceId = '';
@@ -43,6 +32,8 @@ export class WhaleService {
     this.noticeDelayMs = options.noticeDelayMs ?? 2500; this.pendingCostMs = options.pendingCostMs ?? 30000;
     this.closed = false; this.restored = false; this.recoveryActive = new Set();
     this.recoveryError = '';
+    // Told when a Codex turn ends, with the account it ran on; the quota book listens.
+    this.onTurnEnd = options.onTurnEnd || (() => {});
   }
   scope(c, currency) { return c.accountId + '-' + currency; }
   balanceIdentity(c) {
@@ -83,7 +74,7 @@ export class WhaleService {
   }
   stoppedBalance() { return { ok: false, code: 'STOPPED', error: '挂件正在退出，余额将在下次启动时刷新' }; }
   updateSubscriptionRateLimits(snapshot) {
-    const next = safeSubscriptionRateLimits(snapshot);
+    const next = codexSnapshot(snapshot);
     if (!next) return false;
     const previous = this.subscriptionRateLimitsCache;
     if (previous && next.observedAt < previous.observedAt) return false;
@@ -100,17 +91,13 @@ export class WhaleService {
     try { writeJson(this.subscriptionRateLimitContextFile, next); } catch {}
     return true;
   }
+  // The subscription quota while Codex last ran on the subscription. A window
+  // that has reset is no longer shown; the next Codex token event refreshes it.
   subscriptionRateLimits() {
-    const snapshot = safeSubscriptionRateLimits(this.subscriptionRateLimitsCache);
-    // Once either rolling window has reset, the old percentage is no longer
-    // truthful. The next Codex App token event supplies a fresh snapshot.
+    const snapshot = codexSnapshot(this.subscriptionRateLimitsCache);
     const context = safeSubscriptionRateLimitContext(this.subscriptionRateLimitContext);
-    if (!snapshot || !context?.usesSubscription || context.observedAt < snapshot.observedAt ||
-      snapshot.fiveHour.resetsAt <= Date.now() || snapshot.sevenDay.resetsAt <= Date.now()) {
-      return { ok: true, available: false };
-    }
-    return { ok: true, available: true, source: snapshot.source, planType: snapshot.planType,
-      observedAt: new Date(snapshot.observedAt).toISOString(), fiveHour: publicQuota(snapshot.fiveHour), sevenDay: publicQuota(snapshot.sevenDay) };
+    const shown = snapshot && context?.usesSubscription && context.observedAt >= snapshot.observedAt ? publicCodexSnapshot(snapshot) : null;
+    return shown ? { ok: true, available: true, source: snapshot.source, ...shown } : { ok: true, available: false };
   }
   async getBalance({ force = false, context = null } = {}) {
     if (this.closed) return this.stoppedBalance();
@@ -229,7 +216,7 @@ export class WhaleService {
     turn.byModel = safeUsage(meta.byModel || turn.byModel);
     if (meta.rootTurnId) turn.rootTurnId = meta.rootTurnId;
     if (meta.ts) turn.ts = meta.ts;
-    if (safeSubscriptionRateLimits(meta.subscriptionRateLimits)) turn.subscriptionRateLimits = meta.subscriptionRateLimits;
+    if (codexSnapshot(meta.subscriptionRateLimits)) turn.subscriptionRateLimits = meta.subscriptionRateLimits;
     this.persistTurn(turn, 'active');
   }
   persistTurn(turn, stage, meta = turn, extra = {}) {
@@ -292,7 +279,7 @@ export class WhaleService {
     const context = turn.context;
     const outcome = meta.outcome || 'completed';
     const ownUsage = safeUsage(meta.byModel || turn.byModel);
-    const subscriptionRateLimits = publicSubscriptionRateLimits(meta.subscriptionRateLimits);
+    const subscriptionRateLimits = publicCodexSnapshot(meta.subscriptionRateLimits);
     const base = { id: meta.id, sessionId: meta.sessionId || turn.sessionId, turnId: meta.turnId,
       rootTurnId: meta.rootTurnId || turn.rootTurnId || meta.turnId, ts: meta.ts || Date.now(), outcome,
       partial: !!turn.partial, historical: !!meta.historical, accountId: context.accountId,
@@ -308,6 +295,10 @@ export class WhaleService {
       this.reviseRootEstimate(scope, base.rootTurnId);
       this.journal.remove(meta.id);
       return;
+    }
+    // The end of a turn is activity on the account it ran on, known before its cost.
+    if (!meta.historical) {
+      try { this.onTurnEnd({ ts: base.ts, subscription: !!codexSnapshot(meta.subscriptionRateLimits), context }); } catch {}
     }
     const start = await turn.start || { ok: false };
     if (this.closed) return;

@@ -58,14 +58,21 @@ test('missing, unrelated or incomplete windows fall back to API data', t => {
   }
 });
 
-test('either expired window makes the cached percentages unavailable', t => {
+test('a window that has reset is hidden on its own while the other still shows', t => {
   const { service } = fixture(t), now = Date.now();
-  for (const key of ['primary', 'secondary']) {
+  for (const [key, hidden, shown] of [['primary', 'fiveHour', 'sevenDay'], ['secondary', 'sevenDay', 'fiveHour']]) {
     const limits = rateLimits(now);
     limits[key].resets_at = Math.floor((now - 1000) / 1000);
     tokenEvent(parserFor(service), now, limits);
-    assert.equal(service.subscriptionRateLimits().available, false);
+    const result = service.subscriptionRateLimits();
+    assert.equal(result.available, true);
+    assert.equal(result[hidden], null);
+    assert.ok(result[shown].remainingPercent > 0);
   }
+  const limits = rateLimits(now);
+  limits.primary.resets_at = limits.secondary.resets_at = Math.floor((now - 1000) / 1000);
+  tokenEvent(parserFor(service), now + 1, limits);
+  assert.equal(service.subscriptionRateLimits().available, false, 'with both windows reset there is nothing to show');
 });
 
 test('missing percentages are unavailable rather than a full unused quota', t => {

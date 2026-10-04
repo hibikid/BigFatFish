@@ -1,23 +1,10 @@
 import path from 'node:path';
 import { readJson, writeJson } from './paths.mjs';
+import { codexSnapshot } from './quota/windows.mjs';
 
 const countFields = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens'];
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const text = value => typeof value === 'string' ? value.slice(0, 500) : '';
-
-function safeRateWindow(value, expectedMinutes) {
-  const usedPercent = finite(value?.usedPercent), resetsAt = finite(value?.resetsAt);
-  if (usedPercent === null || resetsAt === null || value?.windowMinutes !== expectedMinutes) return null;
-  return { usedPercent: Math.max(0, Math.min(100, usedPercent)), windowMinutes: expectedMinutes, resetsAt };
-}
-
-// A Codex subscription quota snapshot as the runtime stores it: both rolling
-// windows are required, and no account data is kept.
-export function safeSubscriptionRateLimits(value) {
-  const observedAt = finite(value?.observedAt), fiveHour = safeRateWindow(value?.fiveHour, 300), sevenDay = safeRateWindow(value?.sevenDay, 10080);
-  if (observedAt === null || !fiveHour || !sevenDay) return null;
-  return { source: 'codex-session-rate-limits', observedAt, planType: text(value.planType).slice(0, 64), fiveHour, sevenDay };
-}
 
 export function safeUsage(value) {
   const result = {};
@@ -36,7 +23,7 @@ export function safeSample(value) {
 }
 
 export function safeTurn(meta) {
-  const subscriptionRateLimits = safeSubscriptionRateLimits(meta.subscriptionRateLimits);
+  const subscriptionRateLimits = codexSnapshot(meta.subscriptionRateLimits);
   return { id: text(meta.id), sessionId: text(meta.sessionId), turnId: text(meta.turnId),
     rootTurnId: text(meta.rootTurnId || meta.turnId), parentThreadId: text(meta.parentThreadId),
     modelProvider: text(meta.modelProvider).slice(0, 128),

@@ -121,7 +121,12 @@ export class BalanceProvider {
       return limit === null || remaining === null ? null : { limit, remaining, resetsAt };
     }).filter(Boolean).slice(0, 12);
     const primaryRateLimit = rateLimits[0] ? { ...rateLimits[0], used: rounded(Math.max(0, rateLimits[0].limit - rateLimits[0].remaining)) } : null;
-    return { totalBalance: null, totalUsed: rounded(used), sourceDailyUsage: rounded(used), currency: c.setting.currency, adapter: 'source-usage', balanceScope: 'source-usage', balanceLabel: '数据源日用量', unlimited: false, rateLimits, primaryRateLimit };
+    // The service's own record of earlier days, newest first; it is more complete
+    // than what the pet observed while it was running.
+    const dailyUsage = rows.map(row => ({ date: typeof row.date === 'string' ? row.date.slice(0, 10) : '', cost: numeric(row.actual_cost) ?? numeric(row.cost) }))
+      .filter(row => /^\d{4}-\d{2}-\d{2}$/.test(row.date) && row.cost !== null && row.cost >= 0)
+      .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 62);
+    return { totalBalance: null, totalUsed: rounded(used), sourceDailyUsage: rounded(used), currency: c.setting.currency, adapter: 'source-usage', balanceScope: 'source-usage', balanceLabel: '数据源日用量', unlimited: false, rateLimits, primaryRateLimit, dailyUsage };
   }
   async balance(c) {
     if (!c.key) throw new ProviderError('NO_KEY', '未找到当前 API 密钥。ChatGPT 订阅登录本身不提供 API 余额；可在设置中指定 API 密钥环境变量。');

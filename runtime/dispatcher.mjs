@@ -8,8 +8,9 @@ import { createWidgetHost } from '../lib/widget-host.mjs';
 import { migrateData, stripRetiredModules } from './migration.mjs';
 import { createFxService } from './fx.mjs';
 import { MEDIA_POLICY } from '../lib/media-validation.mjs';
-import { ChatService } from './chat/service.mjs';
+import { ChatService, savedEndpoint } from './chat/service.mjs';
 import { claudeLastTurn, claudeSubscription } from './claude-usage.mjs';
+import { QuotaBook } from './quota/book.mjs';
 
 export const UI_ORIGIN = 'whale://widget';
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.gif': 'image/gif', '.mp3': 'audio/mpeg' };
@@ -24,18 +25,25 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
   const fx = createFxService({ dataDir, ...(fxFetchImpl ? { fetchImpl: fxFetchImpl } : {}) });
   const routes = new Map(), effects = [];
   createWidgetHost(dataDir).apply({ whale, webServer: { register: r => { routes.set(r.path, r.handler); return () => routes.delete(r.path); }, tapIndex: () => () => {} }, effect: f => effects.push(f()) });
+  let closing = false, closeJob = null;
+  let chat = null;
+  const chatService = () => chat ||= new ChatService({ dataDir, secretVault, canProactive: () => { const status = statusInfo(); return status.visible !== false && status.present !== false; }, onNotice: onChatNotice,
+    activityOptions: chatActivityOptions, queryBalance: credentials => book.petBalance(credentials), onUserMessage: () => book.petMessage(),
+    ...(chatFetchImpl ? { fetchImpl: chatFetchImpl } : {}) });
+  // The book reads the pet's saved endpoint until the chat service starts, so
+  // looking at quota never starts proactive chat.
+  const book = new QuotaBook({ whale, pet: () => chat ? { baseUrl: chat.settings.baseUrl, key: chat.key(), model: chat.settings.model, billing: chat.billing } : savedEndpoint(dataDir, secretVault) });
+  whale.onTurnEnd = turn => book.codexTurn(turn);
   const watcher = monitor ? new SessionMonitor(whale) : null;
   watcher?.start();
-  const timer = autoRefresh ? setInterval(() => whale.getBalance().catch(() => {}), 60000) : null;
+  const timer = autoRefresh ? setInterval(() => book.refresh().catch(() => {}), 60000) : null;
   timer?.unref();
   if (autoRefresh) {
-    whale.getBalance().catch(() => {});
+    book.refresh().catch(() => {});
     fx.start().catch(() => {});
   }
   const stateFile = path.join(dataDir, 'ui-state.json');
   const buildVersion = readJson(path.join(ROOT, '.codex-plugin', 'plugin.json'), {}).version || VERSION;
-  let closing = false, closeJob = null;
-  let chat = null;
 
   async function dispatch(route, { method = 'GET', body = null, headers = {}, signal } = {}) {
     const result = await run(route, { method, body, headers, signal });
@@ -53,12 +61,18 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
       const parsed = () => JSON.parse(bytes.toString('utf8') || '{}');
       if (url.pathname.startsWith('/api/chat/')) {
         if (bytes.length > 128 * 1024) return jsonResult(413, { ok: false, error: '会话请求过大' });
-        chat ||= new ChatService({ dataDir, secretVault, canProactive: () => { const status = statusInfo(); return status.visible !== false && status.present !== false; }, onNotice: onChatNotice,
-          activityOptions: chatActivityOptions,
-          ...(chatFetchImpl ? { fetchImpl: chatFetchImpl } : {}) });
-        return chat.dispatch(url, { method, body: bytes, signal });
+        return chatService().dispatch(url, { method, body: bytes, signal });
       }
       if (url.pathname === '/api/status' && method === 'GET') return jsonResult(200, { ok: true, version: VERSION, buildVersion, transport: 'local-ipc', webpage: false, provider: whale.config.publicInfo(), monitor: watcher?.status() || { watching: 0, activeTurns: 0 }, subscriptionRateLimits: whale.subscriptionRateLimits(), dataDir, ...statusInfo() });
+      if (url.pathname === '/api/quotas' && method === 'GET') {
+        if (url.searchParams.get('refresh') === '1') await book.refresh({ force: true });
+        return jsonResult(200, book.snapshot());
+      }
+      if (url.pathname === '/api/quotas/current' && method === 'PUT') {
+        const input = parsed();
+        try { return jsonResult(200, book.select(input?.id, input?.at)); }
+        catch (error) { return jsonResult(400, { ok: false, error: error.message }); }
+      }
       if (url.pathname === '/api/subscription-rate-limits' && method === 'GET') return jsonResult(200, whale.subscriptionRateLimits());
       if (url.pathname === '/api/claude/subscription' && method === 'GET') return jsonResult(200, claudeSubscription(dataDir));
       if (url.pathname === '/api/claude/last-turn' && method === 'GET') return jsonResult(200, claudeLastTurn(dataDir));
@@ -160,5 +174,5 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
     })();
     return closeJob;
   }
-  return { dispatch, whale, watcher, close };
+  return { dispatch, whale, book, watcher, close };
 }

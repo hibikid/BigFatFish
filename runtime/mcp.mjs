@@ -4,9 +4,9 @@ import { ensureService, serviceRequest, launchDesktop } from './process.mjs';
 import { DATA_HOME, VERSION, readJson } from './paths.mjs';
 
 const toolSpecs = [
-  { name: 'whale_balance', description: '查询当前 Codex API 服务商的余额、余额口径、币种及今日已观测用量。金额来源于当前 API；不会返回密钥，也不会将 ChatGPT 订阅配额当作 API 余额。', inputSchema: { type: 'object', properties: { refresh: { type: 'boolean', description: '立即从 API 刷新' } }, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'whale_balance', description: '查询大肥鱼汇总的所有额度账户：Codex 与 Claude 订阅的 5 小时、7 天剩余，API 账户（如 Codex 中转站、大肥鱼用的 DeepSeek）的额度、余额、今日消费与消耗速度，以及挂件当前显示哪个账户。不返回密钥。', inputSchema: { type: 'object', properties: { refresh: { type: 'boolean', description: '立即重新查询各 API 账户' } }, additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'whale_usage', description: '读取小鲸鱼今日、近七天和历史用量记录。每日合计只覆盖挂件已观测时段，逐模型金额为配置价格估算。', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
-  { name: 'whale_status', description: '读取当前服务商、挂件状态、Codex 会话用量监听状态，以及本机 Codex App 写入的订阅额度快照（如可用）；不返回 API 密钥。', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
+  { name: 'whale_status', description: '读取挂件状态、Codex 会话用量监听状态，以及全部额度账户与当前显示的账户；不返回 API 密钥。', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true } },
   { name: 'whale_open', description: '显示独立常驻桌面的 API 余额小鲸鱼。挂件不绑定 Codex 窗口，可由托盘或快捷键隐藏；没有网页地址，角色、音效、气泡编辑和资源管理均在挂件中操作。', inputSchema: { type: 'object', properties: { desktop: { type: 'boolean', description: '显示桌面透明悬浮挂件' } }, additionalProperties: false }, annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } },
 ];
 
@@ -23,9 +23,9 @@ async function dispatch(message) {
     else if (method === 'tools/call') {
       const args = params.arguments || {};
       let output;
-      if (params.name === 'whale_balance') output = await serviceRequest('/dsh-whale/balance.json' + (args.refresh ? '?refresh=1' : ''));
+      if (params.name === 'whale_balance') output = await serviceRequest('/api/quotas' + (args.refresh ? '?refresh=1' : ''));
       else if (params.name === 'whale_usage') output = await serviceRequest('/dsh-whale/usage-records.json');
-      else if (params.name === 'whale_status') output = await serviceRequest('/api/status');
+      else if (params.name === 'whale_status') output = { ...await serviceRequest('/api/status'), quotas: await serviceRequest('/api/quotas') };
       else if (params.name === 'whale_open') {
         if (args.desktop) output = await launchDesktop();
         else output = await launchDesktop();

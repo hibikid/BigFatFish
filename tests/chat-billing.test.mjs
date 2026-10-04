@@ -12,10 +12,12 @@ import { formatChatCost } from '../desktop/ui/chat-billing.js';
 const baseUrl = 'https://api.deepseek.com', key = 'synthetic-chat-key';
 const usage = { prompt_tokens: 1000, prompt_cache_hit_tokens: 200, prompt_cache_miss_tokens: 800, completion_tokens: 100, total_tokens: 1100 };
 const balance = (amount = '110', currency = 'CNY') => Response.json({ balance_infos: [{ currency, total_balance: amount }] });
+// The quota book answers balance reads in the running pet.
+const queryBalance = async () => ({ amount: 110, currency: 'CNY' });
 function fixture(t, options = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-chat-billing-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
-  return { dataDir, billing: new ChatBilling({ dataDir, fetchImpl: async () => balance(), ...options }) };
+  return { dataDir, billing: new ChatBilling({ dataDir, queryBalance, ...options }) };
 }
 const turn = (id, timestamp, extra = {}) => ({ id, model: 'deepseek-flash', createdAt: new Date(timestamp).toISOString(), status: 'completed', usage, ...extra });
 
@@ -59,7 +61,7 @@ test('chat ledger retains rolling 30-day costs independently, deduplicates updat
   const first = await billing.summary({ baseUrl, key });
   assert.equal(first.recorded, 2); assert.equal(first.min, 0.002408);
   assert.equal((await billing.summary({ baseUrl, key: 'synthetic-other-key' })).recorded, 1);
-  const restarted = new ChatBilling({ dataDir, now: () => now, fetchImpl: async () => balance() });
+  const restarted = new ChatBilling({ dataDir, now: () => now, queryBalance });
   assert.deepEqual(await restarted.summary({ baseUrl, key }), first);
   assert.ok(!fs.readFileSync(path.join(dataDir, 'chat-billing.json'), 'utf8').includes(key));
   now += 1;
@@ -71,7 +73,7 @@ test('stopped and interrupted generations without usage remain unknown rather th
   const { dataDir, billing } = fixture(t, { now: () => now });
   billing.record(turn('streaming_message', now, { status: 'streaming', usage: undefined }), { baseUrl, key });
   assert.equal((await billing.summary({ baseUrl, key })).pending, 1);
-  const restarted = new ChatBilling({ dataDir, now: () => now, fetchImpl: async () => balance() });
+  const restarted = new ChatBilling({ dataDir, now: () => now, queryBalance });
   const recovered = await restarted.summary({ baseUrl, key });
   assert.equal(recovered.pending, 0); assert.equal(recovered.unknown, 1); assert.equal(recovered.complete, false);
   billing.record(turn('streaming_message', now, { status: 'cancelled', usage: undefined }), { baseUrl, key });
@@ -80,13 +82,13 @@ test('stopped and interrupted generations without usage remain unknown rather th
   assert.equal((await billing.summary({ baseUrl, key })).recorded, 1, 'observed usage still bills a failed reply');
 });
 
-test('balance queries use the official endpoint, share a cache and preserve a stale value on errors', async t => {
+test('balance reads share a cache and preserve a stale value on errors', async t => {
   let calls = 0, reject = false;
-  const { billing } = fixture(t, { fetchImpl: async (url, request) => {
-    calls++; assert.equal(url, baseUrl + '/user/balance'); assert.equal(request.redirect, 'error');
-    assert.equal(new Headers(request.headers).get('authorization'), 'Bearer ' + key);
+  const { billing } = fixture(t, { queryBalance: async credentials => {
+    calls++; assert.deepEqual(credentials, { baseUrl, key });
     await new Promise(resolve => setImmediate(resolve));
-    return reject ? new Response(key, { status: 401 }) : balance('2.50', 'USD');
+    if (reject) throw new Error('HTTP 401');
+    return { amount: 2.5, currency: 'USD' };
   } });
   const results = await Promise.all([billing.summary({ baseUrl, key }), billing.summary({ baseUrl, key, force: true })]);
   assert.equal(calls, 1); assert.equal(results[0].balance.amount, 2.5); assert.equal(results[0].currency, 'USD');
@@ -99,20 +101,19 @@ test('balance queries use the official endpoint, share a cache and preserve a st
 });
 
 test('billing persistence and query failures do not masquerade as successful empty ledgers', async t => {
-  const { dataDir, billing } = fixture(t, { timeoutMs: 5, fetchImpl: async (_url, { signal }) =>
-    new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('timeout')), { once: true })) });
+  const { dataDir, billing } = fixture(t, { queryBalance: async () => { throw new Error('timeout'); } });
   fs.mkdirSync(billing.file);
   billing.record(turn('current_message', Date.now()), { baseUrl, key });
   const result = await billing.summary({ baseUrl, key });
   assert.equal(result.complete, false); assert.match(result.ledgerError, /保存失败/); assert.equal(result.balance, null);
-  const damaged = new ChatBilling({ dataDir, fetchImpl: async () => balance() });
+  const damaged = new ChatBilling({ dataDir, queryBalance });
   assert.match((await damaged.summary({ baseUrl, key })).ledgerError, /不可读/);
 });
 
 test('chat dispatch records streamed usage, refreshes balance, and clearing history preserves billing', async t => {
   const { dataDir } = fixture(t);
   let requests = 0;
-  const dispatcher = createDispatcher({ dataDir, monitor: false, autoRefresh: false, chatFetchImpl: async (url, request) => {
+  const dispatcher = createDispatcher({ dataDir, monitor: false, autoRefresh: false, fetchImpl: async (url, request) => {
     if (url.endsWith('/user/balance')) return balance((110 - requests * 0.001).toFixed(3));
     const payload = JSON.parse(request.body); assert.equal(payload.stream_options.include_usage, true); requests++;
     return new Response('data: ' + JSON.stringify({ choices: [{ delta: { content: 'Hello' } }] }) + '\n\n' +
@@ -130,7 +131,12 @@ test('chat dispatch records streamed usage, refreshes balance, and clearing hist
   assert.equal(first.recorded, 1); assert.ok(first.min > 0); assert.equal(first.balance.amount, 109.999);
   await client.clear(); assert.equal((await client.history()).turns.length, 0);
   assert.equal((await client.billing()).billing.min, first.min);
-  assert.equal(fs.existsSync(path.join(dataDir, 'ledgers')), false, 'chat billing must not write the Codex ledger');
+  // The pet's account keeps a balance ledger like any API account, but a chat
+  // request is never recorded as a Codex turn.
+  for (const name of fs.readdirSync(path.join(dataDir, 'ledgers'))) {
+    assert.match(name, /-CNY\.json$/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'ledgers', name), 'utf8')).events, []);
+  }
 });
 
 test('existing chat usage is recovered into a missing billing ledger once, and survives history clearing', async t => {
@@ -143,7 +149,7 @@ test('existing chat usage is recovered into a missing billing ledger once, and s
     turn('legacy_message', timestamp, { user: 'Hi', text: 'Hello', usage: { prompt_tokens: 670, completion_tokens: 4907, total_tokens: 5577 } })
   ] }));
   const vault = { read: () => ({ value: key }), available: () => true };
-  const makeDispatcher = () => createDispatcher({ dataDir, secretVault: vault, monitor: false, autoRefresh: false, chatFetchImpl: async () => balance() });
+  const makeDispatcher = () => createDispatcher({ dataDir, secretVault: vault, monitor: false, autoRefresh: false, fetchImpl: async () => balance() });
   const dispatcher = makeDispatcher(); t.after(() => dispatcher.close());
   const readBilling = async runtime => JSON.parse((await runtime.dispatch('/api/chat/billing')).body).billing;
   const recovered = await readBilling(dispatcher);
@@ -181,7 +187,7 @@ test('clearing legacy chat before opening billing still preserves its known usag
   fs.writeFileSync(settingsFile, JSON.stringify({ baseUrl, model: 'deepseek-flash', keyRef: 'fixture_chat_key' }));
   fs.utimesSync(settingsFile, new Date(timestamp - 1000), new Date(timestamp - 1000));
   fs.writeFileSync(path.join(dataDir, 'chat-history.json'), JSON.stringify({ turns: [turn('legacy_message', timestamp)] }));
-  const dispatcher = createDispatcher({ dataDir, secretVault: { read: () => ({ value: key }) }, monitor: false, autoRefresh: false, chatFetchImpl: async () => balance() });
+  const dispatcher = createDispatcher({ dataDir, secretVault: { read: () => ({ value: key }) }, monitor: false, autoRefresh: false, fetchImpl: async () => balance() });
   t.after(() => dispatcher.close());
   await dispatcher.dispatch('/api/chat/history', { method: 'DELETE' });
   const result = JSON.parse((await dispatcher.dispatch('/api/chat/billing')).body).billing;
@@ -190,7 +196,7 @@ test('clearing legacy chat before opening billing still preserves its known usag
 
 test('creating, switching and deleting conversations never resets their independent billing', async t => {
   const { dataDir } = fixture(t);
-  const dispatcher = createDispatcher({ dataDir, monitor: false, autoRefresh: false, chatFetchImpl: async url => {
+  const dispatcher = createDispatcher({ dataDir, monitor: false, autoRefresh: false, fetchImpl: async url => {
     if (url.endsWith('/user/balance')) return balance();
     return new Response('data: {"choices":[{"delta":{"content":"Reply"}}]}\n\n' +
       'data: ' + JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage }) + '\n\ndata: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
@@ -212,4 +218,20 @@ test('creating, switching and deleting conversations never resets their independ
   await client.deleteConversation(second); assert.equal((await client.history()).turns.length, 0);
   const after = (await client.billing()).billing;
   assert.equal(after.recorded, 2); assert.equal(after.min, before.min); assert.equal(after.max, before.max);
+});
+
+test('daily spend estimates fill the days a chat account has been used', async t => {
+  const now = new Date(2026, 9, 12, 12).getTime(), day = 86400000;
+  const { billing } = fixture(t, { now: () => now });
+  billing.record(turn('three_days_ago', now - 3 * day), { baseUrl, key });
+  billing.record(turn('yesterday', now - day), { baseUrl, key });
+  billing.record(turn('yesterday_again', now - day + 1000), { baseUrl, key });
+  billing.record(turn('today', now - 1000), { baseUrl, key });
+  const spend = billing.dailySpend({ baseUrl, key, currency: 'CNY' });
+  const one = (estimateDeepSeek('deepseek-flash', usage, now - day).amounts.CNY.min + estimateDeepSeek('deepseek-flash', usage, now - day).amounts.CNY.max) / 2;
+  assert.deepEqual(spend.days.map(row => row.date), ['2026-10-11', '2026-10-10', '2026-10-09'], 'days before the first request are unknown');
+  assert.equal(spend.days[1].total, 0, 'a day without requests cost nothing');
+  assert.ok(Math.abs(spend.days[0].total - 2 * one) < 1e-9);
+  assert.ok(spend.today > 0);
+  assert.deepEqual(billing.dailySpend({ baseUrl, key: 'synthetic-other-key', currency: 'CNY' }), { today: null, days: [] });
 });

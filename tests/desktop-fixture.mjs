@@ -15,12 +15,13 @@ export async function makeFixture(dataDir) {
   fs.writeFileSync(path.join(codexHome, 'config.toml'), 'model_provider = "fixture"\n[model_providers.fixture]\nbase_url = "https://fixture.example.test/v1"\nenv_key = "FIXTURE_KEY"\n');
   const config = new ConfigStore({ dataDir, codexHome, env: { FIXTURE_KEY: 'synthetic-test-key' } });
   config.save({ provider: 'custom-json', balancePath: '/balance', balanceField: 'balance', monitorSessions: false });
-  const service = new WhaleService({ config, fetchImpl: async () => Response.json({ balance: 12.3456 }) });
   let completedChatCalls = 0;
-  const chatFetchImpl = async (url, { body, signal }) => {
-    if (url === 'https://api.deepseek.com/user/balance') return Response.json({ is_available: true, balance_infos: [
+  // Balances, the pet's included, are read through the quota book's service.
+  const service = new WhaleService({ config, fetchImpl: async url => url === 'https://api.deepseek.com/user/balance' ?
+    Response.json({ is_available: true, balance_infos: [
       { currency: 'CNY', total_balance: (110 - completedChatCalls * 0.001).toFixed(3), granted_balance: '10', topped_up_balance: '100' }
-    ] });
+    ] }) : Response.json({ balance: 12.3456 }) });
+  const chatFetchImpl = async (url, { body, signal }) => {
     const input = JSON.parse(body), last = input.messages.at(-1).content.replace(/^\[[^\]]+\] /, '');
     if (last === '启动番茄钟') return new Response('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [
       { index: 0, id: 'timer_call', type: 'function', function: { name: 'pomodoro_set', arguments: '{"focusMinutes":30,"breakMinutes":5,"cycles":2}' } }
@@ -406,7 +407,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('Claude 订阅额度') && el.innerText.includes('5小时剩余80%') && el.innerText.includes('7天剩余35%'))", 'click after Claude reply did not show Claude quota');
     assert.equal((await measureLayout('claude-quota')).fits, true, 'Claude quota rows must fit the visible bubble');
     await js('window.__whaleRenderTest.close()');
-    saveClaudeUsage(dataDir, { rate_limits: {} }, now);
+    fs.rmSync(path.join(dataDir, 'claude-subscription.json'));
     await js('window.__whaleRenderTest.refresh(true)');
     await until("document.querySelector('.dshwv-root').title.includes('Claude 订阅额度 · 等待更新')", 'missing Claude quota should be unknown');
     await js("document.querySelector('[data-source=codex]').click()");

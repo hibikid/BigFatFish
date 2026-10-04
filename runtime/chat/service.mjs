@@ -24,19 +24,34 @@ function declined(text) {
   return /[[【]不打扰[\]】]/.test(text) || bare.startsWith('不打扰') && bare.length <= 8;
 }
 function savedAt(file) { try { return fs.statSync(file).mtimeMs; } catch { return Infinity; } }
+function storedSettings(file) {
+  const stored = readJson(file, {});
+  return { ...DEFAULTS, ...stored, keyRef: typeof stored.keyRef === 'string' ? stored.keyRef : stored.baseUrl ? KEY_REF : '' };
+}
+
+// The pet's saved endpoint and key, read without starting the chat service.
+export function savedEndpoint(dataDir, vault) {
+  try {
+    const settings = storedSettings(path.join(dataDir, 'chat-settings.json'));
+    const key = settings.keyRef ? vault?.read?.(settings.keyRef)?.value || '' : '';
+    return settings.baseUrl && key ? { baseUrl: settings.baseUrl, key, model: settings.model } : null;
+  } catch { return null; }
+}
 
 export class ChatService {
-  constructor({ dataDir, secretVault, fetchImpl = fetch, idleMs = 60000, timeoutMs = 180000, canProactive = () => true, onNotice = () => {}, now = Date.now, activityOptions = {} }) {
+  // queryBalance reads the account balance from the quota book; onUserMessage
+  // tells it that you wrote to the pet.
+  constructor({ dataDir, secretVault, fetchImpl = fetch, idleMs = 60000, timeoutMs = 180000, canProactive = () => true, onNotice = () => {}, now = Date.now,
+    activityOptions = {}, queryBalance = null, onUserMessage = () => {} }) {
     this.configFile = path.join(dataDir, 'chat-settings.json');
-    const stored = readJson(this.configFile, {});
-    this.settings = { ...DEFAULTS, ...stored, keyRef: typeof stored.keyRef === 'string' ? stored.keyRef : stored.baseUrl ? KEY_REF : '' };
+    this.settings = storedSettings(this.configFile);
     this.settingsSavedAt = savedAt(this.configFile);
     this.conversations = new Conversations(dataDir);
     this.vault = secretVault; this.fetchImpl = fetchImpl; this.memoryKey = ''; this.active = null; this.background = null;
     this.cancelledIds = new Set();
     this.idleMs = idleMs; this.timeoutMs = timeoutMs;
     this.now = activityOptions.now || now;
-    this.billing = new ChatBilling({ dataDir, fetchImpl });
+    this.billing = new ChatBilling({ dataDir, queryBalance }); this.onUserMessage = onUserMessage;
     this.activity = new ChatActivity({ dataDir, canProactive: () => canProactive() && !this.active && !this.background,
       onProactive: () => this.proactive(), onReminder: state => this.reminder(state), onNotice, now: this.now, ...activityOptions });
   }
@@ -170,6 +185,7 @@ export class ChatService {
     const turn = { id, user: text, text: '', status: 'streaming', source: 'user', createdAt: new Date(this.now()).toISOString(), model: settings.model, requests: [] };
     this.turns.push(turn); this.persist();
     try { this.activity.userActivity(); } catch {}
+    try { this.onUserMessage(); } catch {}
     this.active = { id, controller };
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });

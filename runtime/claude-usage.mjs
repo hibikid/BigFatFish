@@ -1,47 +1,53 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJson } from './paths.mjs';
+import { WINDOW_MINUTES, publicWindows, storedWindow } from './quota/windows.mjs';
 
 const FILE = 'claude-subscription.json';
 const TURN_FILE = 'claude-last-turn.json';
-const windowValue = (value, now) => {
-  const usedPercent = value?.used_percentage, resetSeconds = value?.resets_at;
-  if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100 ||
-    typeof resetSeconds !== 'number' || !Number.isSafeInteger(resetSeconds)) return null;
-  const resetsAt = resetSeconds * 1000;
-  if (resetsAt <= now || !Number.isFinite(resetsAt)) return null;
-  return { usedPercent, resetsAt };
-};
+// Claude's status line reports each window as a used share and a reset time in
+// seconds. A window that has already reset carries nothing worth keeping.
+function claudeWindow(value, windowMinutes, now) {
+  const resetSeconds = value?.resets_at;
+  if (!Number.isSafeInteger(resetSeconds)) return null;
+  const window = storedWindow({ usedPercent: value.used_percentage, resetsAt: resetSeconds * 1000 }, windowMinutes);
+  return window && window.resetsAt > now ? { usedPercent: window.usedPercent, resetsAt: window.resetsAt } : null;
+}
 
 export function captureClaudeUsage(input, now = Date.now()) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const limits = input.rate_limits;
   return { source: 'claude-statusline', observedAt: now,
-    fiveHour: windowValue(limits?.five_hour, now), sevenDay: windowValue(limits?.seven_day, now) };
+    fiveHour: claudeWindow(limits?.five_hour, WINDOW_MINUTES.fiveHour, now), sevenDay: claudeWindow(limits?.seven_day, WINDOW_MINUTES.sevenDay, now) };
 }
 
+// The stored snapshot, or null when there is none or it cannot be trusted.
+export function readClaudeSnapshot(dataDir, now = Date.now()) {
+  let snapshot;
+  try { snapshot = readJson(path.join(dataDir, FILE), null); } catch { return null; }
+  return snapshot?.source === 'claude-statusline' && Number.isFinite(snapshot.observedAt) && snapshot.observedAt <= now + 60000 ? snapshot : null;
+}
+
+// A push without quota, such as one made before the first reply, keeps the
+// windows already known instead of replacing them with nothing.
 export function saveClaudeUsage(dataDir, input, now = Date.now()) {
   const snapshot = captureClaudeUsage(input, now);
-  if (!snapshot) return false;
+  if (!snapshot || !snapshot.fiveHour && !snapshot.sevenDay) return false;
+  const previous = readClaudeSnapshot(dataDir, now);
+  for (const [key, minutes] of Object.entries(WINDOW_MINUTES)) {
+    const kept = storedWindow(previous?.[key], minutes);
+    if (!snapshot[key] && kept && kept.resetsAt > now) snapshot[key] = { usedPercent: kept.usedPercent, resetsAt: kept.resetsAt };
+  }
   writeJson(path.join(dataDir, FILE), snapshot);
   return true;
 }
 
-function publicWindow(value, now) {
-  if (!value || typeof value.usedPercent !== 'number' || !Number.isFinite(value.usedPercent) ||
-    value.usedPercent < 0 || value.usedPercent > 100 || !Number.isFinite(value.resetsAt) || value.resetsAt <= now) return null;
-  return { usedPercent: value.usedPercent, remainingPercent: 100 - value.usedPercent, resetsAt: new Date(value.resetsAt).toISOString() };
-}
-
 export function claudeSubscription(dataDir, now = Date.now()) {
-  let snapshot;
-  try { snapshot = readJson(path.join(dataDir, FILE), null); } catch { return { ok: true, available: false, source: 'claude-statusline' }; }
-  if (snapshot?.source !== 'claude-statusline' || !Number.isFinite(snapshot.observedAt) || snapshot.observedAt > now + 60000) {
-    return { ok: true, available: false, source: 'claude-statusline' };
-  }
-  const fiveHour = publicWindow(snapshot.fiveHour, now), sevenDay = publicWindow(snapshot.sevenDay, now);
-  return { ok: true, available: !!(fiveHour || sevenDay), source: 'claude-statusline', provider: 'Claude',
-    observedAt: new Date(snapshot.observedAt).toISOString(), fiveHour, sevenDay };
+  const snapshot = readClaudeSnapshot(dataDir, now);
+  if (!snapshot) return { ok: true, available: false, source: 'claude-statusline' };
+  const windows = publicWindows(snapshot, now);
+  return { ok: true, available: windows.available, source: 'claude-statusline', provider: 'Claude',
+    observedAt: new Date(snapshot.observedAt).toISOString(), fiveHour: windows.fiveHour, sevenDay: windows.sevenDay };
 }
 
 export function saveClaudeTurn(dataDir, input, now = Date.now()) {

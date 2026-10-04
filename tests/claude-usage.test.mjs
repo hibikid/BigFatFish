@@ -50,9 +50,23 @@ test('invalid or absent rate-limit windows never become zero usage or replace Co
   const now = Date.now();
   assert.equal(claudeSubscription(dataDir, now).available, false);
   assert.equal(captureClaudeUsage({ rate_limits: { five_hour: { used_percentage: 101, resets_at: now / 1000 + 3600 } } }, now).fiveHour, null);
-  assert.equal(saveClaudeUsage(dataDir, { rate_limits: {} }, now), true);
+  assert.equal(saveClaudeUsage(dataDir, { rate_limits: {} }, now), false, 'a push without quota saves nothing');
   assert.equal(claudeSubscription(dataDir, now).available, false);
   assert.equal(fs.existsSync(path.join(dataDir, 'subscription-rate-limits.json')), false);
+});
+
+test('a push without quota keeps the windows already known', t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-claude-keep-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const now = Date.now();
+  saveClaudeUsage(dataDir, sample(now), now);
+  assert.equal(saveClaudeUsage(dataDir, { session_id: 'private-session', rate_limits: {} }, now + 1000), false);
+  assert.equal(claudeSubscription(dataDir, now + 1000).fiveHour.remainingPercent, 76.5);
+  saveClaudeUsage(dataDir, { rate_limits: { five_hour: { used_percentage: 50, resets_at: Math.floor(now / 1000) + 7200 } } }, now + 2000);
+  const result = claudeSubscription(dataDir, now + 2000);
+  assert.equal(result.fiveHour.remainingPercent, 50, 'a reported window replaces the old one');
+  assert.equal(result.sevenDay.remainingPercent, 58.8, 'a window left out keeps its last value until it resets');
+  assert.equal(result.observedAt, new Date(now + 2000).toISOString());
 });
 
 test('collector accepts official stdin JSON without saving message content', t => {

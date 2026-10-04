@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { Worker } from 'node:worker_threads';
+import { codexSnapshot } from './quota/windows.mjs';
 
 const fields = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens'];
 const normalize = value => Object.fromEntries(fields.map(key => [key, Math.max(0, Number(value?.[key]) || 0)]));
@@ -15,21 +16,14 @@ const timestamp = value => typeof value === 'number' ? (value < 1e12 ? value * 1
 function rateWindow(value) {
   const rawUsed = value?.used_percent ?? value?.usedPercent;
   if (typeof rawUsed !== 'number' && (typeof rawUsed !== 'string' || !rawUsed.trim())) return null;
-  const usedPercent = Number(rawUsed);
-  const windowMinutes = Number(value?.window_minutes ?? value?.windowDurationMins);
-  const resetsAt = timestamp(value?.resets_at ?? value?.resetsAt);
-  if (!Number.isFinite(usedPercent) || !Number.isSafeInteger(windowMinutes) || windowMinutes <= 0 || !Number.isFinite(resetsAt)) return null;
-  return { usedPercent: Math.max(0, Math.min(100, usedPercent)), windowMinutes, resetsAt };
+  return { usedPercent: Math.max(0, Math.min(100, Number(rawUsed))), windowMinutes: Number(value?.window_minutes ?? value?.windowDurationMins),
+    resetsAt: timestamp(value?.resets_at ?? value?.resetsAt) };
 }
 
 export function normalizeSubscriptionRateLimits(value, observedAt = Date.now()) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || value.limit_id !== 'codex') return null;
-  const fiveHour = rateWindow(value.primary), sevenDay = rateWindow(value.secondary);
-  if (!fiveHour || !sevenDay || fiveHour.windowMinutes !== 300 || sevenDay.windowMinutes !== 10080) return null;
-  const at = Number(observedAt);
-  if (!Number.isFinite(at)) return null;
-  return { source: 'codex-session-rate-limits', observedAt: at,
-    planType: typeof value.plan_type === 'string' ? value.plan_type.slice(0, 64) : '', fiveHour, sevenDay };
+  return codexSnapshot({ observedAt: Number(observedAt), planType: value.plan_type,
+    fiveHour: rateWindow(value.primary), sevenDay: rateWindow(value.secondary) });
 }
 
 export class SessionParser {

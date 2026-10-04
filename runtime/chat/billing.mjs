@@ -1,16 +1,16 @@
 import path from 'node:path';
-import { createHash } from 'node:crypto';
-import { readJson, writeJson } from '../paths.mjs';
-import { BalanceProvider } from '../providers.mjs';
+import { dayKey, readJson, writeJson } from '../paths.mjs';
+import { apiFingerprint as accountId } from '../quota/book.mjs';
 import { billingUsage, estimateDeepSeek, officialDeepSeek } from './deepseek-pricing.mjs';
 
 const WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-const accountId = (baseUrl, key) => createHash('sha256').update(new URL(baseUrl).origin + '\0' + key).digest('hex');
 
 export class ChatBilling {
-  constructor({ dataDir, fetchImpl = fetch, now = Date.now, timeoutMs = 12000, balanceTtlMs = 60000 }) {
+  // queryBalance({ baseUrl, key }) reads the account balance from the quota
+  // book, where every balance is queried and cached; without it there is none.
+  constructor({ dataDir, queryBalance = null, now = Date.now, balanceTtlMs = 60000 }) {
     this.file = path.join(dataDir, 'chat-billing.json'); this.now = now; this.balanceTtlMs = balanceTtlMs;
-    this.provider = new BalanceProvider({ fetchImpl, timeoutMs }); this.balances = new Map();
+    this.queryBalance = queryBalance; this.balances = new Map();
     this.error = ''; this.readFailed = false;
     try {
       this.entries = readJson(this.file, { entries: [] }).entries;
@@ -61,9 +61,10 @@ export class ChatBilling {
     const version = cache.version;
     cache.job = (async () => {
       try {
-        const result = await this.provider.deepseek({ baseUrl: 'https://api.deepseek.com', key: credentials.key, setting: { currency: 'CNY' } });
-        if (!['CNY', 'USD'].includes(result.currency)) throw new Error('invalid currency');
-        cache.value = { amount: result.totalBalance, currency: result.currency, updatedAt: new Date(this.now()).toISOString() };
+        if (!this.queryBalance) throw new Error('no balance source');
+        const result = await this.queryBalance(credentials);
+        if (!['CNY', 'USD'].includes(result.currency) || !Number.isFinite(result.amount)) throw new Error('invalid balance');
+        cache.value = { amount: result.amount, currency: result.currency, updatedAt: new Date(this.now()).toISOString() };
         cache.error = '';
       } catch { cache.error = '余额查询失败，请稍后刷新'; }
       cache.queriedVersion = version;
@@ -77,7 +78,7 @@ export class ChatBilling {
     const empty = { supported, configured: !!key, days: 30, currency: 'CNY', min: 0, max: 0, recorded: 0, pending: 0, unknown: 0, complete: !this.error,
       ledgerError: this.error, balance: null, balanceStale: false, balanceError: '' };
     if (!supported || !key) return { ...empty, complete: false, balanceError: supported ? '尚未配置会话密钥' : '此会话网站暂不支持余额查询' };
-    const scope = accountId(baseUrl, key), cache = await this.balance(scope, { key }, force);
+    const scope = accountId(baseUrl, key), cache = await this.balance(scope, { baseUrl, key }, force);
     const currency = cache.value?.currency || 'CNY', now = this.now();
     const rows = this.entries.filter(row => row.scope === scope && row.timestamp >= now - WINDOW_MS && row.timestamp <= now);
     let min = 0, max = 0, recorded = 0, pending = 0, unknown = 0;
@@ -90,5 +91,28 @@ export class ChatBilling {
     }
     return { supported, configured: true, days: 30, currency, min, max, recorded, pending, unknown, complete: !this.error && !pending && !unknown,
       ledgerError: this.error, balance: cache.value, balanceStale: !!cache.error, balanceError: cache.error };
+  }
+  // The estimated spend of one account per day, from the midpoint of each
+  // request's estimate: today, and the full days before it, newest first. Days
+  // before its first recorded request are unknown, so they are left out.
+  dailySpend({ baseUrl, key, currency, days = 7, now = this.now() }) {
+    if (!officialDeepSeek(baseUrl) || !key) return { today: null, days: [] };
+    const scope = accountId(baseUrl, key), totals = new Map();
+    const rows = this.entries.filter(row => row.scope === scope && row.timestamp <= now);
+    if (!rows.length) return { today: null, days: [] };
+    for (const row of rows) {
+      const amount = row.estimate?.amounts?.[currency];
+      if (!amount || !Number.isFinite(amount.min) || !Number.isFinite(amount.max)) continue;
+      const date = dayKey(row.timestamp);
+      totals.set(date, (totals.get(date) || 0) + (amount.min + amount.max) / 2);
+    }
+    const first = dayKey(Math.min(...rows.map(row => row.timestamp))), result = [];
+    for (let index = 1; index <= days; index++) {
+      const day = new Date(now); day.setDate(day.getDate() - index);
+      const date = dayKey(day);
+      if (date < first) break;
+      result.push({ date, total: totals.get(date) || 0 });
+    }
+    return { today: totals.get(dayKey(now)) || 0, days: result };
   }
 }
