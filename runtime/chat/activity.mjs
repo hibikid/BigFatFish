@@ -36,14 +36,14 @@ export class ChatActivity {
     this.acked = Number.isSafeInteger(stored.acked) ? stored.acked : 0;
     this.nextAt = Number.isFinite(stored.nextAt) ? stored.nextAt : 0;
     this.day = stored.day || ''; this.dailyCount = stored.dailyCount || 0;
-    this.lastUserAt = stored.lastUserAt || 0;
+    this.lastUserAt = stored.lastUserAt || 0; this.lastProactiveAt = stored.lastProactiveAt || 0;
     this.busy = false; this.closed = false; this.proactiveJob = false; this.lastProactiveCheck = 0; this.prepared = null;
     this.presence = { busy: false, at: 0 };
     this.timer = startTimer ? setInterval(() => { void this.tick(); }, 1000) : null;
     this.timer?.unref();
     if (startTimer) void this.tick();
   }
-  persist() { writeJson(this.stateFile, { pomodoro: this.pomodoro, notices: this.notices, sequence: this.sequence, acked: this.acked, nextAt: this.nextAt, day: this.day, dailyCount: this.dailyCount, lastUserAt: this.lastUserAt }); }
+  persist() { writeJson(this.stateFile, { pomodoro: this.pomodoro, notices: this.notices, sequence: this.sequence, acked: this.acked, nextAt: this.nextAt, day: this.day, dailyCount: this.dailyCount, lastUserAt: this.lastUserAt, lastProactiveAt: this.lastProactiveAt }); }
   settings() { return { ...this.config }; }
   saveSettings(input) {
     const config = { enabled: input.enabled === true, start: String(input.start || ''), end: String(input.end || ''), minMinutes: Number(input.minMinutes), maxMinutes: Number(input.maxMinutes), dailyLimit: Number(input.dailyLimit) };
@@ -60,6 +60,13 @@ export class ChatActivity {
     const date = new Date(timestamp), current = date.getHours() * 60 + date.getMinutes();
     const start = minute(this.config.start), end = minute(this.config.end);
     return start < end ? current >= start && current < end : current >= start || current < end;
+  }
+  // The day a moment belongs to. A day begins at the start of the window, so a
+  // window past midnight stays one day with one daily cap.
+  dayOf(timestamp) {
+    const date = new Date(timestamp);
+    if (date.getHours() * 60 + date.getMinutes() < minute(this.config.start)) date.setDate(date.getDate() - 1);
+    return date.toLocaleDateString('en-CA');
   }
   userActivity() { this.lastUserAt = this.now(); this.nextAt = Math.max(this.nextAt, this.lastUserAt + 20 * 60000); this.persist(); }
   setPresence(input) { this.presence = { busy: input.busy === true, at: this.now() }; }
@@ -120,16 +127,18 @@ export class ChatActivity {
         this.lastProactiveCheck = now;
         if (this.config.enabled && this.inWindow(now) && !pomodoroInProgress(this.pomodoro) && this.canProactive() && !this.proactiveJob &&
           !(this.presence.busy && now - this.presence.at < 10000)) {
-          const day = new Date(now).toLocaleDateString('en-CA');
+          const day = this.dayOf(now);
           if (this.day !== day) { this.day = day; this.dailyCount = 0; }
+          // An unanswered message is not followed by another until the user replies or a new day begins.
+          const unanswered = this.lastProactiveAt > this.lastUserAt && this.dayOf(this.lastProactiveAt) === day;
           if (!this.nextAt || this.nextAt < now - 2 * 3600000) { this.nextAt = now + this.intervalMs(); this.persist(); }
-          else if (now >= this.nextAt && this.dailyCount < this.config.dailyLimit && now - this.lastUserAt >= 20 * 60000 && !this.notices.some(item => item.seq > this.acked)) {
+          else if (now >= this.nextAt && this.dailyCount < this.config.dailyLimit && now - this.lastUserAt >= 20 * 60000 && !unanswered && !this.notices.some(item => item.seq > this.acked)) {
             this.nextAt = now + this.intervalMs(); this.dailyCount++; this.proactiveJob = true; this.persist();
             jobs.push((async () => {
               try {
                 const generated = await this.onProactive().catch(() => null);
                 const reply = !this.closed && !pomodoroInProgress(this.pomodoro) ? settle(generated) : null;
-                if (reply) this.notice('proactive', reply.text, reply.conversationId);
+                if (reply) { this.lastProactiveAt = this.now(); this.notice('proactive', reply.text, reply.conversationId); }
                 else { this.dailyCount--; this.persist(); }
               } finally { this.proactiveJob = false; }
             })());

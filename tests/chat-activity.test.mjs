@@ -214,6 +214,42 @@ test('proactive chat stays within the configured window and daily cap, and does 
   activity.close();
 });
 
+test('proactive chat waits for a reply before speaking again, until a new day begins', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-unanswered-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const local = new Date(); local.setHours(10, 0, 0, 0);
+  let now = local.getTime(), calls = 0;
+  const activity = new ChatActivity({ dataDir, now: () => now, random: () => 0, startTimer: false,
+    onProactive: async () => { calls++; return generated('在吗？', 'spontaneous_1'); } });
+  t.after(() => activity.close());
+  activity.saveSettings({ enabled: true, start: '09:00', end: '21:00', minMinutes: 15, maxMinutes: 15, dailyLimit: 5 });
+  const wait = async minutes => { now += minutes * 60000; await activity.tick(); for (const item of activity.snapshot().notices) activity.ack(item.seq); };
+  await wait(15); assert.equal(calls, 1);
+  await wait(15); await wait(60); assert.equal(calls, 1, 'an unanswered message must not be followed by another');
+  activity.userActivity();
+  await wait(20); assert.equal(calls, 2, 'a reply lets proactive chat continue');
+  local.setDate(local.getDate() + 1); local.setHours(9, 30, 0, 0); now = local.getTime();
+  await wait(0); await wait(15); assert.equal(calls, 3, 'a new day starts without waiting for the reply');
+});
+
+test('a day of proactive chat starts at the start of the window, so a window past midnight keeps one daily cap', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-companion-day-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const local = new Date(); local.setHours(22, 45, 0, 0);
+  let now = local.getTime(), calls = 0;
+  const activity = new ChatActivity({ dataDir, now: () => now, random: () => 0, startTimer: false,
+    onProactive: async () => { calls++; return generated('还没睡呀？', 'spontaneous_1'); } });
+  t.after(() => activity.close());
+  activity.saveSettings({ enabled: true, start: '09:00', end: '01:00', minMinutes: 15, maxMinutes: 15, dailyLimit: 1 });
+  const wait = async minutes => { now += minutes * 60000; await activity.tick(); for (const item of activity.snapshot().notices) activity.ack(item.seq); };
+  await wait(15); assert.equal(calls, 1);
+  activity.userActivity();
+  await wait(105); assert.equal(new Date(now).getHours(), 0);
+  assert.equal(calls, 1, 'past midnight is still the same day of the window');
+  local.setDate(local.getDate() + 1); local.setHours(9, 30, 0, 0); now = local.getTime();
+  await wait(0); await wait(15); assert.equal(calls, 2);
+});
+
 test('scheduled messages alternate between remembered and fresh topics without changing the selected chat, and count in billing', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-scheduled-chat-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
@@ -239,7 +275,8 @@ test('scheduled messages alternate between remembered and fresh topics without c
   const firstNotice = service.activity.snapshot().notices[0];
   assert.equal(firstNotice.kind, 'proactive');
   service.activity.ack(firstNotice.seq);
-  random = 0.9; now += 15 * 60000; await service.activity.tick();
+  service.activity.userActivity();
+  random = 0.9; now += 20 * 60000; await service.activity.tick();
   assert.equal(requests[2].messages.some(message => message.content.endsWith('] 昨天的咖啡很好喝')), false);
   assert.equal(service.history().conversations.length, 2, 'one dedicated spontaneous conversation is reused');
   assert.equal((await service.billing.summary({ baseUrl: 'https://api.deepseek.com', key: 'synthetic-key' })).recorded, 3);
