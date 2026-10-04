@@ -139,6 +139,8 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
   const meterRows = "[...document.querySelectorAll('.dshwv-meter:not([hidden]) .dshwv-meter-row')].map(row => row.textContent + ':' + row.querySelector('.dshwv-meter-fill').style.width)";
   await until(`JSON.stringify(${meterRows}) === '["余额:100%"]'`, 'the API balance meter is not full at the first balance seen');
   assert.ok(await js("document.querySelector('.dshwv-meter').getBoundingClientRect().top >= document.querySelector('.dshwv-img').getBoundingClientRect().bottom - 1"), 'the meter must sit under the pet');
+  // The default role's visible bottom edge runs from 17% of its image box to the right edge.
+  await until("(() => { const m = document.querySelector('.dshwv-meter').getBoundingClientRect(), i = document.querySelector('.dshwv-img').getBoundingClientRect(); return Math.abs(m.right - i.right) <= 1.5 && Math.abs(m.left - (i.left + 0.17 * i.width)) <= 2; })()", 'the meter must span the pet\'s bottom edge');
   passed.push('a usage meter under the pet shows the API balance against the full balance');
   // Observe browser audio requests without playing sounds on the developer desktop.
   await js('window.__playedAudio = []; HTMLMediaElement.prototype.play = function () { window.__playedAudio.push(this.src); return Promise.resolve(); }; undefined;');

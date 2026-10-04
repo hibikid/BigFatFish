@@ -73,7 +73,7 @@
     styleEl.textContent += '\n.dshwv-fxicon:hover{background:rgba(32,49,112,.20);color:#203170}';
     styleEl.textContent += '\n.dshwv-fxicon:focus-visible{outline:2px solid rgba(32,49,112,.55);outline-offset:1px}';
     styleEl.textContent += '\n.dshwv-fxinfo{position:fixed;z-index:27000;max-width:min(320px,calc(100vw - 16px));box-sizing:border-box;background:#fff;border:1px solid rgba(32,49,112,.35);border-radius:8px;box-shadow:0 6px 16px rgba(0,0,0,.16);padding:8px 10px;color:#203170;font-size:11px;line-height:1.5;text-align:left;white-space:pre-line;pointer-events:auto;color-scheme:light}';
-    styleEl.textContent += '\n.dshwv-meter{position:absolute;right:0;top:100%;width:59.45%;box-sizing:border-box;padding:3px 10% 0;display:flex;flex-direction:column;gap:3px;pointer-events:none;font:700 clamp(8px,calc(var(--dshw-base) * .04),13px)/1 system-ui,sans-serif;color:#2f5556;text-shadow:0 0 2px #fff,0 0 2px #fff}.dshwv-meter[hidden]{display:none}.dshwv-root.dshwv-left .dshwv-meter{transform:scaleX(-1)}.dshwv-meter-inside .dshwv-meter{top:auto;bottom:2px;padding-top:0}.dshwv-meter-row{display:flex;align-items:center;gap:4px}.dshwv-meter-track{flex:1;height:clamp(4px,calc(var(--dshw-base) * .022),8px);border-radius:4px;background:rgba(255,255,255,.8);box-shadow:inset 0 0 0 1px rgba(47,85,86,.35);overflow:hidden}.dshwv-meter-fill{height:100%;border-radius:4px;background:#3fb68b}.dshwv-meter-warn .dshwv-meter-fill{background:#e0a32e}.dshwv-meter-low .dshwv-meter-fill{background:#e05a4f}';
+    styleEl.textContent += '\n.dshwv-meter{position:absolute;left:40.55%;top:100%;width:59.45%;box-sizing:border-box;padding:3px 6px;display:flex;flex-direction:column;gap:3px;pointer-events:none;background:rgba(255,255,255,.92);border-radius:6px;box-shadow:0 0 0 1px rgba(47,85,86,.25);font:600 10px/1 system-ui,sans-serif;color:#2f5556;-webkit-font-smoothing:antialiased}.dshwv-meter[hidden]{display:none}.dshwv-root.dshwv-left .dshwv-meter{transform:scaleX(-1)}.dshwv-meter-row{display:flex;align-items:center;gap:4px}.dshwv-meter-row span{min-width:1.4em}.dshwv-meter-track{flex:1;height:var(--dshw-meter-bar,5px);border-radius:4px;background:rgba(255,255,255,.8);box-shadow:inset 0 0 0 1px rgba(47,85,86,.35);overflow:hidden}.dshwv-meter-fill{height:100%;border-radius:4px;background:#3fb68b}.dshwv-meter-warn .dshwv-meter-fill{background:#e0a32e}.dshwv-meter-low .dshwv-meter-fill{background:#e05a4f}';
     styleEl.textContent += '\n.dshwv-source-switch{display:flex;flex:1;min-width:0;border:1px solid #badbdc;border-radius:6px;overflow:hidden}.dshwv-source-switch button{flex:1;min-width:0;border:0;background:#fff;color:#356a6c;padding:5px 8px;font-size:12px}.dshwv-source-switch button[aria-pressed="true"]{background:#146b70;color:#fff}.dshwv-source-switch button:focus-visible{outline:2px solid #146b70;outline-offset:-2px}';
     document.head.appendChild(styleEl);
     var root = document.createElement('div');
@@ -7929,6 +7929,13 @@
     meterBox.hidden = true;
     body.appendChild(meterBox);
     var meterKey = '';
+    var petEdges = new WeakMap();
+    img.addEventListener('load', function () {
+      WhaleRendering.hitCache.prepare(img.currentSrc || img.src).then(function () {
+        placeUsageMeters();
+        WhaleRendering.presentFor(120);
+      });
+    });
     root.appendChild(body);
     root.appendChild(menuBtn);
     document.body.appendChild(positioner);
@@ -9239,11 +9246,28 @@
         WhaleRendering.presentFor(200);
       } catch (err) {}
     }
-    // Under the pet when there is room; inside the bottom of its image at the screen edge.
+    // Where the visible pet ends, from its alpha mask; null until the mask is decoded.
+    function petBottomEdge() {
+      var mask = WhaleRendering.hitCache.maskOf(img);
+      if (!mask) return null;
+      if (!petEdges.has(mask)) petEdges.set(mask, WhalePetGeometry.bottomEdge(mask));
+      return petEdges.get(mask);
+    }
+    // As wide as the pet's bottom edge and just under it, in whole pixels so text
+    // stays sharp; inside the bottom of the pet when the screen edge leaves no room.
     function placeUsageMeters() {
       if (!meterBox || meterBox.hidden) return;
-      var h = root.offsetHeight || root.getBoundingClientRect().height || 0;
-      root.classList.toggle('dshwv-meter-inside', state.top + h + meterBox.offsetHeight + 2 > viewport().h);
+      var size = root.offsetWidth || 0;
+      if (!size) return;
+      var box = size * 0.5945, boxStart = size - box, edge = petBottomEdge() || { left: 0, right: 1, bottom: 1 };
+      var left = Math.round(boxStart + edge.left * box), right = Math.round(boxStart + edge.right * box);
+      var bottom = Math.round(boxStart + edge.bottom * box);
+      meterBox.style.fontSize = Math.max(9, Math.min(13, Math.round(size * 0.05))) + 'px';
+      meterBox.style.setProperty('--dshw-meter-bar', Math.max(4, Math.min(8, Math.round(size * 0.025))) + 'px');
+      meterBox.style.left = left + 'px';
+      meterBox.style.width = Math.max(48, right - left) + 'px';
+      var height = meterBox.offsetHeight;
+      meterBox.style.top = (state.top + bottom + 3 + height <= viewport().h ? bottom + 3 : bottom - height - 3) + 'px';
     }
     function express() {
       positioner.style.transform = 'translate3d(' + state.left + 'px,' + state.top + 'px,0)';

@@ -77,6 +77,8 @@
         this.entries.delete(key);
       }
     }
+    // The decoded mask for an image once ready; null before that or after a failed decode.
+    maskOf(img) { return img ? this.entries.get(this.key(img.currentSrc || img.src))?.mask || null : null; }
     hit(img, x, y, flipped = false) {
       if (!img?.complete || !img.naturalWidth) return false;
       const r = img.getBoundingClientRect();

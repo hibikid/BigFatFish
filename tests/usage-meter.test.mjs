@@ -45,3 +45,16 @@ test('the meter shows what is left of an API key quota, or the balance against t
   }
   assert.deepEqual(meters({ status: 'loading', balance: null }), []);
 });
+
+const geometry = browserModule('pet-geometry.js');
+// A square alpha mask drawn from rows of '#' (opaque) and '.' (clear).
+const mask = rows => ({ width: rows[0].length, height: rows.length, alpha: Uint8Array.from(rows.join(''), cell => cell === '#' ? 255 : 0) });
+
+test('the meter spans the bottom edge of the visible pet', () => {
+  const edge = rows => JSON.parse(JSON.stringify(geometry.bottomEdge(mask(rows))));
+  assert.deepEqual(edge(['..........', '....####..', '...######.', '..#######.', '..#######.']),
+    { left: 0.2, right: 0.9, bottom: 1 }, 'the lowest rows, not the box');
+  assert.deepEqual(edge(['##########', '##########', '##########', '.......###', '.......###']),
+    { left: 0, right: 1, bottom: 1 }, 'a bottom edge under half the pet is too narrow; the pet width is used');
+  assert.equal(geometry.bottomEdge(mask(['....', '....'])), null);
+});
