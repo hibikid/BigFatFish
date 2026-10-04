@@ -40,19 +40,14 @@ app.on('gpu-info-update', () => {
   fs.promises.writeFile(path.join(dataDir, 'render-status.json'), JSON.stringify(gpuStatus, null, 2)).catch(() => {});
 });
 function invalidate() { if (window && !window.isDestroyed()) { presents++; window.webContents.invalidate(); } }
-// Resolves whether the page has native keyboard focus: the app active, the
-// window key and the page focused. Activation is asynchronous, so editing waits
-// up to a second for it.
-async function setKeyboardFocus(editing) {
-  if (!window || window.isDestroyed()) return false;
+function setKeyboardFocus(editing) {
+  if (!window || window.isDestroyed()) return;
   keyboardFocus = editing;
-  if (!editing) return false;
-  // A key window in an accessory app can accept ASCII without activating the native IME client.
-  if (isMac && !app.isActive()) app.focus({ steal: true });
-  if (!window.isFocused()) window.focus();
-  const ready = () => !window.isDestroyed() && (!isMac || app.isActive()) && window.isFocused() && window.webContents.isFocused();
-  for (let i = 0; i < 50 && !ready(); i++) await new Promise(resolve => setTimeout(resolve, 20));
-  return ready();
+  if (editing) {
+    // A key window in an accessory app can accept ASCII without activating the native IME client.
+    if (isMac && !app.isActive()) app.focus({ steal: true });
+    if (!window.isFocused()) window.focus();
+  }
 }
 function sendCursor(force = false) {
   if (!window || window.isDestroyed() || !rendererReady || !window.isVisible()) return;
@@ -168,11 +163,16 @@ else {
       return new Response(request.method === 'HEAD' ? null : result.body, { status: result.status, headers: result.headers });
     });
     const area = desktopArea(screen) || screen.getPrimaryDisplay().workArea;
+    // On macOS a click must not activate the app: the first activation of the
+    // process being a click leaves Pinyin and other input methods detached, so
+    // Chinese types Latin letters until the app activates itself. The panel type
+    // makes clicks non-activating; surfaces that need the keyboard activate the
+    // app through setKeyboardFocus.
     // WS_EX_TOOLWINDOW keeps the large transparent overlay out of Chromium's
     // native occlusion calculation even while its opaque pixels accept clicks.
     // Keep normal activation: Chromium's non-client handler consumes the first
     // mouse down (MA_NOACTIVATEANDEAT) when CanActivate/focusable is false.
-    window = new BrowserWindow({ ...area, ...(isMac ? { acceptFirstMouse: true } : { type: 'toolbar' }), transparent: true, frame: false, thickFrame: false, resizable: false, maximizable: false, fullscreenable: false, backgroundColor: '#00000000', hasShadow: false, skipTaskbar: true, show: false, title: 'API 余额小鲸鱼', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required', additionalArguments: fixture ? ['--whale-render-test'] : [] } });
+    window = new BrowserWindow({ ...area, ...(isMac ? { acceptFirstMouse: true, type: 'panel' } : { type: 'toolbar' }), transparent: true, frame: false, thickFrame: false, resizable: false, maximizable: false, fullscreenable: false, backgroundColor: '#00000000', hasShadow: false, skipTaskbar: true, show: false, title: 'API 余额小鲸鱼', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required', additionalArguments: fixture ? ['--whale-render-test'] : [] } });
     if (isMac) {
       if (app.dock) app.dock.hide();
       window.setAlwaysOnTop(true, 'floating', 1);
@@ -232,7 +232,9 @@ else {
       inputEnabled = enabled;
       window.setIgnoreMouseEvents(!enabled, { forward: true });
     });
-    ipcMain.handle('whale-keyboard-focus', (event, editing) => event.sender === window.webContents && typeof editing === 'boolean' ? setKeyboardFocus(editing) : false);
+    ipcMain.on('whale-keyboard-focus', (event, editing) => {
+      if (event.sender === window.webContents && typeof editing === 'boolean') setKeyboardFocus(editing);
+    });
     const cursorPoll = setInterval(sendCursor, 50);
     const visibilityWatchdog = setInterval(() => { syncDesktop(); visibility(); }, 1000);
     visibilityWatchdog.unref?.();

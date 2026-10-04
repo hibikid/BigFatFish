@@ -88,24 +88,10 @@ async function load() {
   })().finally(() => { loadJob = null; });
   return loadJob;
 }
-// AppKit attaches the input method to a field only when the field gains focus
-// while the page already has native focus; otherwise Chinese input types Latin
-// letters. So wait for native focus, and refocus a field that kept its focus.
-async function focusInput() {
-  const ready = await window.whaleDesktop.keyboardFocus(true);
-  if (composer.hidden) return;
-  if (ready && document.activeElement === input) {
-    input.blur();
-    // Let the page report the unfocused field before focusing it again.
-    await new Promise(resolve => setTimeout(resolve, 100));
-    if (composer.hidden || document.activeElement !== document.body) return;
-  }
-  input.focus({ preventScroll: true });
-}
 async function open() {
   const notice = currentNotice;
   display.open();
-  void focusInput();
+  requestAnimationFrame(() => { window.whaleDesktop.keyboardFocus(true); input.focus({ preventScroll: true }); });
   if (!active || active.recovering) { setStatus('正在读取会话'); try { await load(); } catch (error) { loaded = false; controls(); setStatus(errorText(error)); } }
   if (notice && currentNotice === notice && !active) display.showNotice(notice.text);
   void billing.refresh();

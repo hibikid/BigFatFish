@@ -142,18 +142,9 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
 
   if (process.platform === 'darwin') {
     assert.equal(typeof chatShortcutAvailable, 'boolean');
-    // AppKit attaches the input method only when a field gains focus while the page
-    // already has native focus. Record the page focus at every chat-field focus.
-    await js("window.__chatFocus = []; const focus = HTMLTextAreaElement.prototype.focus; HTMLTextAreaElement.prototype.focus = function (...args) { if (this.id === 'chat-input' && document.activeElement !== this) window.__chatFocus.push(document.hasFocus()); return focus.apply(this, args); }; undefined");
-    const focusedWithPage = async message => {
-      await until("window.__chatFocus.length && document.activeElement === document.getElementById('chat-input')", message);
-      assert.equal(await js('window.__chatFocus.at(-1)'), true, message);
-      await js('window.__chatFocus = []; undefined');
-    };
     activateChatShortcut();
     await until("!document.getElementById('chat-composer').hidden && document.activeElement === document.getElementById('chat-input')", 'Ctrl+0 did not open a focused chat composer');
     assert.equal(app.isActive(), true, 'chat has DOM focus but the macOS application is inactive, so native IME has no active client');
-    await focusedWithPage('opening chat from another app must focus the field after the page has native focus, or Chinese input types Latin letters');
     for (let i = 0; !window.isFocused() && i < 30; i++) await delay(100);
     assert.equal(window.isFocused(), true, 'chat must acquire native window focus before testing a later loss of focus');
     window.blur();
@@ -162,7 +153,6 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     activateChatShortcut();
     for (let i = 0; !window.isFocused() && i < 30; i++) await delay(100);
     assert.equal(window.isFocused(), true, 'Ctrl+0 must restore native focus even when the composer is already open');
-    await focusedWithPage('Ctrl+0 must refocus an already focused field once the page has native focus, so the input method reattaches');
     await js("document.getElementById('chat-show-history').focus()");
     activateChatShortcut();
     await until("document.activeElement === document.getElementById('chat-input')", 'Ctrl+0 did not refocus an open composer');
