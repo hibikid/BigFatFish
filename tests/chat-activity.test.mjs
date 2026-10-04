@@ -298,7 +298,7 @@ test('proactive chat speaks only to a user who is present at the computer', asyn
   assert.equal((await notices())[0]?.text, '在吗？');
 });
 
-test('scheduled messages alternate between remembered and fresh topics without changing the selected chat, and count in billing', async t => {
+test('scheduled messages remember recent exchanges whether they follow one up or open a new topic, without changing the selected chat, and count in billing', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-scheduled-chat-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const local = new Date(); local.setHours(10, 0, 0, 0);
@@ -325,9 +325,38 @@ test('scheduled messages alternate between remembered and fresh topics without c
   service.activity.ack(firstNotice.seq);
   service.activity.userActivity();
   random = 0.9; now += 20 * 60000; await service.activity.tick();
-  assert.equal(requests[2].messages.some(message => message.content.endsWith('] 昨天的咖啡很好喝')), false);
+  assert.ok(requests[2].messages.some(message => message.content.endsWith('] 昨天的咖啡很好喝')), 'a new topic must not forget what was just said');
+  assert.match(requests[2].messages.at(-1).content, /新话题/);
   assert.equal(service.history().conversations.length, 2, 'one dedicated spontaneous conversation is reused');
   assert.equal((await service.billing.summary({ baseUrl: 'https://api.deepseek.com', key: 'synthetic-key' })).recorded, 3);
+});
+
+test('replies in the companion conversation remember recent exchanges everywhere, while other conversations remember only themselves', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-companion-memory-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const local = new Date(); local.setHours(10, 0, 0, 0);
+  let now = local.getTime();
+  const requests = [];
+  const service = new ChatService({ dataDir, activityOptions: { now: () => now, random: () => 0, startTimer: false }, fetchImpl: async (url, options) => {
+    if (url.endsWith('/user/balance')) return Response.json({ balance_infos: [] });
+    requests.push(JSON.parse(options.body).messages);
+    return sse([{ choices: [{ index: 0, delta: { content: requests.length === 2 ? '签证材料准备好了吗？' : '好' } }] }, { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage }]);
+  } });
+  t.after(() => service.close());
+  service.save({ baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: 'synthetic-key', persona: '你是大肥鱼', maxTokens: 256 });
+  const topic = service.history().conversationId;
+  await consume(service.start({ id: 'visa_topic', text: '签证要带旧护照' }));
+  service.activity.saveSettings({ enabled: true, start: '09:00', end: '21:00', minMinutes: 15, maxMinutes: 15, dailyLimit: 2 });
+  now += 20 * 60000; await service.activity.tick();
+  const companion = service.activity.snapshot().notices[0].conversationId;
+  const said = (messages, text) => messages.some(message => message.content.endsWith(text));
+  service.changeConversation('select', companion);
+  now += 5 * 60000; await consume(service.start({ id: 'companion_reply', text: '还没呢' }));
+  assert.ok(said(requests[2], '] 签证要带旧护照'), 'the companion conversation remembers what was said elsewhere');
+  assert.ok(said(requests[2], '签证材料准备好了吗？'));
+  service.changeConversation('select', topic);
+  now += 5 * 60000; await consume(service.start({ id: 'topic_reply', text: '继续说签证' }));
+  assert.equal(said(requests[3], '签证材料准备好了吗？') || said(requests[3], '] 还没呢'), false, 'a normal conversation keeps to itself');
 });
 
 test('chat and automatic replies tell the model the current time without persisting it in conversation history', async t => {

@@ -82,6 +82,15 @@ export class ChatService {
   history() { return { turns: structuredClone(this.turns), activeId: this.active?.id || null,
     conversationId: this.conversations.currentId, conversations: this.conversations.list() }; }
   activitySnapshot() { return this.activity.snapshot(); }
+  // Recent exchanges: every conversation's turns in time order; a reply keeps the latest ones.
+  recentExchanges() {
+    return this.conversations.allTurns().sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+  }
+  // What the character remembers when replying in a conversation: a normal one
+  // remembers itself, the companion conversation the recent exchanges.
+  memoryOf(conversation) {
+    return conversation?.kind === 'spontaneous' ? this.recentExchanges() : [...conversation?.turns || []];
+  }
   reply(settings, key, options) {
     return generateReply({ endpoint: { baseUrl: settings.baseUrl, model: settings.model, maxTokens: settings.maxTokens, key }, persona: settings.persona,
       now: this.now(), fetchImpl: this.fetchImpl, record: (request, credentials) => this.billing.record(request, credentials), ...options });
@@ -112,17 +121,17 @@ export class ChatService {
       background.resolve();
     }
   }
-  // Half the time continues from the dozen latest exchanges across conversations; otherwise opens a new topic.
-  // The character may decline instead; a declined message is never kept or shown.
+  // Remembers the recent exchanges, like the companion conversation it lands in. Half
+  // the time it follows one of them up; otherwise it opens a new topic. The
+  // character may decline instead; a declined message is never kept or shown.
   async proactive() {
-    const recent = this.activity.random() < 0.5 ? this.conversations.allTurns().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(-12) : null;
-    const generated = await this.backgroundReply({ source: 'proactive', history: recent || [], prompt: (recent ? '结合我们最近聊过的一件事，主动和我随便聊一句。不要推测我现在正在做什么。' :
-      '按你的人设，主动发起一个轻松的新话题。不要推测我现在正在做什么。') + DECLINE_OFFER });
+    const prompt = this.activity.random() < 0.5 ? '结合我们最近聊过的一件事，主动和我随便聊一句。' : '按你的人设，主动发起一个轻松的新话题。';
+    const generated = await this.backgroundReply({ source: 'proactive', history: this.recentExchanges(), prompt: prompt + '不要推测我现在正在做什么。' + DECLINE_OFFER });
     return generated && declined(generated.text) ? null : generated;
   }
   async reminder(state) {
     const prompt = `番茄钟状态：${state.phase}；第 ${state.cycle}/${state.cycles} 轮；专注 ${state.focusMinutes} 分钟，休息 ${state.breakMinutes} 分钟。请按人设简短提醒我${state.phase === 'await_break' ? '专注结束，可以准备休息了' : state.phase === 'await_focus' ? '休息结束，可以准备下一轮专注了' : '本次专注已经完成'}。阶段尚未开始，不要宣称已经开始，不要要求我发送消息确认，也不要解释界面操作。`;
-    return this.backgroundReply({ source: 'pomodoro', prompt, history: this.conversations.find(state.conversationId)?.turns, conversationId: state.conversationId });
+    return this.backgroundReply({ source: 'pomodoro', prompt, history: this.memoryOf(this.conversations.find(state.conversationId)), conversationId: state.conversationId });
   }
   persist() { this.conversations.persist(); }
   changeConversation(action, id) {
@@ -156,7 +165,7 @@ export class ChatService {
     const controller = new AbortController(), settings = { ...this.settings };
     if (this.cancelledIds.has(id)) controller.abort();
     this.background?.controller.abort();
-    const conversationId = this.conversations.currentId, history = [...this.turns];
+    const conversationId = this.conversations.currentId, history = this.memoryOf(this.conversations.current);
     const tools = { definitions: POMODORO_TOOLS, policy: POMODORO_POLICY, execute: call => this.activity.tool(call, conversationId) };
     const turn = { id, user: text, text: '', status: 'streaming', source: 'user', createdAt: new Date(this.now()).toISOString(), model: settings.model, requests: [] };
     this.turns.push(turn); this.persist();
