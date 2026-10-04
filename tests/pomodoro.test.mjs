@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro, pomodoroInProgress, reminderCanAdvance, upcomingExpiry } from '../runtime/chat/pomodoro.mjs';
+import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro, pomodoroInProgress, reminderCanAdvance, upcomingExpiry, holdsProactiveChat } from '../runtime/chat/pomodoro.mjs';
 
 const MINUTE = 60000, now = Date.UTC(2026, 8, 30, 2, 0);
 const call = (name, args = {}) => ({ name, arguments: JSON.stringify(args) });
@@ -83,6 +83,23 @@ test('a finished phase waits for the user with a reminder that can advance only 
 test('a plan is in progress from its start until it completes or stops', () => {
   const focus = set(1, 1, 1).state, done = expire(focus, now + MINUTE).state;
   assert.deepEqual([IDLE, focus, control(focus, 'pause').state, done, control(focus, 'stop').state].map(pomodoroInProgress), [false, true, true, false, false]);
+});
+
+test('a running phase keeps proactive chat quiet; a plan left waiting or paused does so for an hour at most', () => {
+  const focus = set(25, 5, 2).state, end = focus.dueAt;
+  const waiting = expire(focus, end).state, paused = control(focus, 'pause', now + 10 * MINUTE).state;
+  assert.equal(holdsProactiveChat(focus, end - MINUTE), true);
+  assert.equal(holdsProactiveChat(waiting, end + 59 * MINUTE), true);
+  assert.equal(holdsProactiveChat(waiting, end + 61 * MINUTE), false, 'a reminder left unanswered for an hour no longer keeps the character quiet');
+  assert.equal(holdsProactiveChat(paused, now + 69 * MINUTE), true);
+  assert.equal(holdsProactiveChat(paused, now + 71 * MINUTE), false);
+  assert.equal(holdsProactiveChat(control(paused, 'resume', now + 120 * MINUTE).state, now + 125 * MINUTE), true, 'resuming runs a phase again');
+  const onBreak = control(waiting, 'start_break', end + 90 * MINUTE).state;
+  assert.equal(holdsProactiveChat(onBreak, end + 92 * MINUTE), true);
+  assert.equal(holdsProactiveChat(expire(onBreak, onBreak.dueAt).state, onBreak.dueAt + 10 * MINUTE), true, 'the next waiting phase starts its own hour');
+  assert.equal(holdsProactiveChat(IDLE, now), false);
+  assert.equal(holdsProactiveChat(expire(set(1, 1, 1).state, now + MINUTE).state, now + MINUTE), false, 'a completed plan never does');
+  assert.equal(holdsProactiveChat({ ...waiting, waitingSince: undefined }, end), false, 'a plan saved waiting before this rule does not');
 });
 
 test('the view reports the remaining time from the runtime clock', () => {

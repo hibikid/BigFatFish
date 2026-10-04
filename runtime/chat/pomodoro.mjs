@@ -17,9 +17,16 @@ const refuse = error => ({ ok: false, error });
 const own = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
 const between = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
 const ADVANCING = ['await_break', 'await_focus'];
+const HOUR = 60 * 60000;
 
-// Whether a plan is under way; proactive chat waits until it completes or stops.
+// Whether a plan is under way, from its start until it completes or stops.
 export const pomodoroInProgress = state => !['idle', 'completed'].includes(state.phase);
+// Whether the plan keeps proactive chat quiet: a running phase does, and a plan
+// waiting for the user, after a reminder or a pause, does for an hour at most.
+export function holdsProactiveChat(state, now) {
+  if (['focus', 'break'].includes(state.phase)) return true;
+  return ['await_break', 'await_focus', 'paused'].includes(state.phase) && now - state.waitingSince < HOUR;
+}
 // Whether clicking the reminder starts the next phase; the completion reminder has none.
 export const reminderCanAdvance = reminder => ADVANCING.includes(reminder?.phase);
 
@@ -38,11 +45,11 @@ export function applyPomodoroCall(state, call, { now, conversationId = null, new
   }
   if (!own(args, ['action', 'minutes']) || !['pause', 'resume', 'start_break', 'start_focus', 'extend_focus', 'stop'].includes(args.action)) return refuse('此操作不在预授权范围内');
   const { action, minutes } = args, { phase } = state;
-  if (action === 'pause' && ['focus', 'break'].includes(phase)) return { ok: true, state: { ...state, phase: 'paused', pausedFrom: phase, remainingMs: Math.max(0, state.dueAt - now), dueAt: null } };
-  if (action === 'resume' && phase === 'paused') return { ok: true, state: { ...state, phase: state.pausedFrom, dueAt: now + state.remainingMs, pausedFrom: null, remainingMs: null } };
-  if (action === 'start_break' && ['focus', 'await_break'].includes(phase) && state.cycle < state.cycles) return { ok: true, state: { ...state, phase: 'break', dueAt: now + state.breakMinutes * 60000 } };
-  if (action === 'start_focus' && ['break', 'await_focus'].includes(phase) && state.cycle < state.cycles) return { ok: true, state: { ...state, phase: 'focus', cycle: state.cycle + 1, dueAt: now + state.focusMinutes * 60000 } };
-  if (action === 'extend_focus' && ['focus', 'await_break'].includes(phase) && between(minutes, 1, 60)) return { ok: true, state: { ...state, phase: 'focus', dueAt: Math.max(now, state.dueAt || now) + minutes * 60000 } };
+  if (action === 'pause' && ['focus', 'break'].includes(phase)) return { ok: true, state: { ...state, phase: 'paused', pausedFrom: phase, remainingMs: Math.max(0, state.dueAt - now), dueAt: null, waitingSince: now } };
+  if (action === 'resume' && phase === 'paused') return { ok: true, state: { ...state, phase: state.pausedFrom, dueAt: now + state.remainingMs, pausedFrom: null, remainingMs: null, waitingSince: null } };
+  if (action === 'start_break' && ['focus', 'await_break'].includes(phase) && state.cycle < state.cycles) return { ok: true, state: { ...state, phase: 'break', dueAt: now + state.breakMinutes * 60000, waitingSince: null } };
+  if (action === 'start_focus' && ['break', 'await_focus'].includes(phase) && state.cycle < state.cycles) return { ok: true, state: { ...state, phase: 'focus', cycle: state.cycle + 1, dueAt: now + state.focusMinutes * 60000, waitingSince: null } };
+  if (action === 'extend_focus' && ['focus', 'await_break'].includes(phase) && between(minutes, 1, 60)) return { ok: true, state: { ...state, phase: 'focus', dueAt: Math.max(now, state.dueAt || now) + minutes * 60000, waitingSince: null } };
   if (action === 'stop' && pomodoroInProgress(state)) return { ok: true, state: IDLE };
   return refuse('当前阶段不能执行此操作');
 }
@@ -52,7 +59,7 @@ export function applyPomodoroCall(state, call, { now, conversationId = null, new
 export function expirePomodoro(state, now, newId) {
   if (!['focus', 'break'].includes(state.phase) || now < state.dueAt) return null;
   const phase = state.phase === 'break' ? 'await_focus' : state.cycle === state.cycles ? 'completed' : 'await_break';
-  const next = { ...state, phase, dueAt: null, reminderId: newId() };
+  const next = { ...state, phase, dueAt: null, reminderId: newId(), waitingSince: now };
   return { state: next, reminder: Object.fromEntries(REMINDER_KEYS.map(key => [key, next[key]])) };
 }
 

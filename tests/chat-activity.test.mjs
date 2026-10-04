@@ -211,6 +211,10 @@ test('proactive chat stays within the configured window and daily cap, and does 
   now += 15 * 60000; await activity.tick(); assert.equal(calls, 1);
   activity.tool(tool('pomodoro_set', { focusMinutes: 25, breakMinutes: 5, cycles: 2 }), 'chat_1');
   now += 24 * 3600000; await activity.tick(); assert.equal(calls, 1);
+  for (const item of activity.snapshot().notices) activity.ack(item.seq);
+  now += 61 * 60000; await activity.tick();
+  now += 15 * 60000; await activity.tick();
+  assert.equal(calls, 2, 'a reminder left unanswered for an hour no longer keeps the character quiet');
   assert.equal(activity.inWindow(new Date(local.getFullYear(), local.getMonth(), local.getDate(), 22).getTime()), false);
   activity.close();
 });

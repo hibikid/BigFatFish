@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJson } from '../paths.mjs';
-import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro, pomodoroInProgress, reminderCanAdvance, upcomingExpiry } from './pomodoro.mjs';
+import { IDLE, applyPomodoroCall, expirePomodoro, reminderApplies, advancePomodoro, viewPomodoro, holdsProactiveChat, reminderCanAdvance, upcomingExpiry } from './pomodoro.mjs';
 
 const DEFAULTS = { enabled: false, start: '09:00', end: '21:00', minMinutes: 45, maxMinutes: 90, dailyLimit: 3 };
 // A reminder is asked for this long before its phase ends, so it can show on time.
@@ -125,7 +125,7 @@ export class ChatActivity {
       }
       if (now - this.lastProactiveCheck >= 30000) {
         this.lastProactiveCheck = now;
-        if (this.config.enabled && this.inWindow(now) && !pomodoroInProgress(this.pomodoro) && this.canProactive() && !this.proactiveJob &&
+        if (this.config.enabled && this.inWindow(now) && !holdsProactiveChat(this.pomodoro, now) && this.canProactive() && !this.proactiveJob &&
           !(this.presence.busy && now - this.presence.at < 10000)) {
           const day = this.dayOf(now);
           if (this.day !== day) { this.day = day; this.dailyCount = 0; }
@@ -137,7 +137,7 @@ export class ChatActivity {
             jobs.push((async () => {
               try {
                 const generated = await this.onProactive().catch(() => null);
-                const reply = !this.closed && !pomodoroInProgress(this.pomodoro) ? settle(generated) : null;
+                const reply = !this.closed && !holdsProactiveChat(this.pomodoro, this.now()) ? settle(generated) : null;
                 if (reply) { this.lastProactiveAt = this.now(); this.notice('proactive', reply.text, reply.conversationId); }
                 else { this.dailyCount--; this.persist(); }
               } finally { this.proactiveJob = false; }
