@@ -10,22 +10,18 @@
     var MAX_SCALE = 2.5;
     var STEP = 0.1;
     var CLICK_SQ = 9;
-    var REFRESH_MS = 60000;
-    var SUBSCRIPTION_POLL_MS = 5000;
+    var QUOTA_POLL_MS = 10000;
 
 
     var BUBBLE_MS = 5000;
     var whaleMoneyTemplates = new WeakMap();
     var usageClient = WhaleUsageClient.create({
       fetchImpl: window.fetch.bind(window),
-      acceptsSubscription: WhaleUsagePresentation.hasSubscription,
       shouldNotify: WhaleTurnNotice.shouldNotify,
       storage: {
         getItem: function (key) { return localStorage.getItem(key); },
-        setItem: function (key, value) { localStorage.setItem(key, value); },
-        removeItem: function (key) { localStorage.removeItem(key); }
-      },
-      onSource: function (source) { showUsageSource(source); }
+        setItem: function (key, value) { localStorage.setItem(key, value); }
+      }
     });
     var bubbleQueue = WhaleBubbleQueue.create({
       show: function (item) {
@@ -73,7 +69,6 @@
     styleEl.textContent += '\n.dshwv-fxicon:hover{background:rgba(32,49,112,.20);color:#203170}';
     styleEl.textContent += '\n.dshwv-fxicon:focus-visible{outline:2px solid rgba(32,49,112,.55);outline-offset:1px}';
     styleEl.textContent += '\n.dshwv-fxinfo{position:fixed;z-index:27000;max-width:min(320px,calc(100vw - 16px));box-sizing:border-box;background:#fff;border:1px solid rgba(32,49,112,.35);border-radius:8px;box-shadow:0 6px 16px rgba(0,0,0,.16);padding:8px 10px;color:#203170;font-size:11px;line-height:1.5;text-align:left;white-space:pre-line;pointer-events:auto;color-scheme:light}';
-    styleEl.textContent += '\n.dshwv-meter{position:absolute;left:40.55%;top:100%;width:59.45%;box-sizing:border-box;padding:3px 6px;display:flex;flex-direction:column;gap:3px;pointer-events:none;background:rgba(255,255,255,.92);border-radius:6px;box-shadow:0 0 0 1px rgba(47,85,86,.25);font:600 10px/1 system-ui,sans-serif;color:#2f5556;-webkit-font-smoothing:antialiased}.dshwv-meter[hidden]{display:none}.dshwv-root.dshwv-left .dshwv-meter{transform:scaleX(-1)}.dshwv-meter-row{display:flex;align-items:center;gap:4px}.dshwv-meter-row span{min-width:1.4em}.dshwv-meter-track{flex:1;height:var(--dshw-meter-bar,5px);border-radius:4px;background:rgba(255,255,255,.8);box-shadow:inset 0 0 0 1px rgba(47,85,86,.35);overflow:hidden}.dshwv-meter-fill{height:100%;border-radius:4px;background:#3fb68b}.dshwv-meter-warn .dshwv-meter-fill{background:#e0a32e}.dshwv-meter-low .dshwv-meter-fill{background:#e05a4f}';
     styleEl.textContent += '\n.dshwv-source-switch{display:flex;flex:1;min-width:0;border:1px solid #badbdc;border-radius:6px;overflow:hidden}.dshwv-source-switch button{flex:1;min-width:0;border:0;background:#fff;color:#356a6c;padding:5px 8px;font-size:12px}.dshwv-source-switch button[aria-pressed="true"]{background:#146b70;color:#fff}.dshwv-source-switch button:focus-visible{outline:2px solid #146b70;outline-offset:-2px}';
     document.head.appendChild(styleEl);
     var root = document.createElement('div');
@@ -821,21 +816,6 @@
       }
     } catch (err) {}
     menuBox.appendChild(rowPomodoroSound);
-    var sourceRow = menuRow();
-    sourceRow.appendChild(menuLabel('额度来源'));
-    var sourceSwitch = document.createElement('div');
-    sourceSwitch.className = 'dshwv-source-switch';
-    var sourceButtons = {};
-    [['codex', 'Codex'], ['claude', 'Claude']].forEach(function (entry) {
-      var button = document.createElement('button');
-      button.type = 'button'; button.textContent = entry[1];
-      button.dataset.source = entry[0];
-      button.addEventListener('click', function (event) { event.stopPropagation(); usageClient.select(entry[0]); });
-      sourceButtons[entry[0]] = button;
-      sourceSwitch.appendChild(button);
-    });
-    sourceRow.appendChild(sourceSwitch);
-    menuBox.appendChild(sourceRow);
     var currencyRow = menuRow();
     currencyRow.appendChild(menuLabel('显示币种'));
     var currencySel = document.createElement('select');
@@ -7923,16 +7903,11 @@
     body.className = 'dshwv-body';
     body.appendChild(img);
     body.appendChild(bubbleBox);
-    // Usage meter: remaining 5h and 7d quota, or what is left of the API balance.
-    var meterBox = document.createElement('div');
-    meterBox.className = 'dshwv-meter';
-    meterBox.hidden = true;
-    body.appendChild(meterBox);
-    var meterKey = '';
-    var petEdges = new WeakMap();
+    // The quota view under the pet places itself on each layout change.
+    function petLayout() { window.dispatchEvent(new Event('whale-pet-layout')); }
     img.addEventListener('load', function () {
       WhaleRendering.hitCache.prepare(img.currentSrc || img.src).then(function () {
-        placeUsageMeters();
+        petLayout();
         WhaleRendering.presentFor(120);
       });
     });
@@ -7989,10 +7964,6 @@
       message: '',
       flip: false
     };
-    function syncSourceButtons() {
-      Object.keys(sourceButtons).forEach(function (source) { sourceButtons[source].setAttribute('aria-pressed', String(usageClient.source() === source)); });
-    }
-    syncSourceButtons();
     var SNAP_KEY = 'dshw-snap';
     var SNAP_VER = 3;
     var SNAP_DEFAULTS = {
@@ -8453,7 +8424,7 @@
       if (bubbleScene && bubbleScene.ttlMs > 0) bubbleTtlTimer = setTimeout(bubbleAutoClose, bubbleScene.ttlMs);
     }
     function bubbleRenderDefault(firstSubscriptionQuota) {
-      if (usageClient.source() === 'claude' && firstSubscriptionQuota && hasSubscriptionQuota()) {
+      if (quotaAccount && quotaAccount.provider === 'claude' && firstSubscriptionQuota && hasSubscriptionQuota()) {
         bubbleRenderSubscriptionNotice(state.subscription, 'Claude 订阅额度');
       } else restoreBubbleLines(firstSubscriptionQuota);
     }
@@ -8593,7 +8564,7 @@
         hideBubble();
         return;
       }
-      if (usageClient.source() === 'claude' && firstSubscriptionQuota) {
+      if (quotaAccount && quotaAccount.provider === 'claude' && firstSubscriptionQuota) {
         sceneOpen('normal', function () {
           bubbleRenderDefault(true);
         }, BUBBLE_MS, { firstSubscriptionQuota: true });
@@ -8621,8 +8592,8 @@
     function hasSubscriptionQuota(snapshot) {
       return WhaleUsagePresentation.hasSubscription(snapshot || state.subscription);
     }
-    function bubbleLabelText(snapshot) {
-      return usageClient.source() === 'claude' ? 'Claude 订阅额度' : '当前 API 余额';
+    function bubbleLabelText() {
+      return WhaleQuotaPresentation.label(quotaAccount);
     }
     function bubbleContentTokenMap(m, snapshot) {
       m = m || ({});
@@ -9195,84 +9166,29 @@
         bubbleRenderDefault(firstSubscriptionQuota);
       }, bubbleScene.ttlMs || BUBBLE_MS, { firstSubscriptionQuota: firstSubscriptionQuota });
     }
-    function applySubscriptionQuota(subscription) {
-      var view = WhaleUsagePresentation.subscription(subscription);
-      if (!view) return false;
-      var changed = WhaleUsagePresentation.subscriptionFingerprint(state.subscription) !== WhaleUsagePresentation.subscriptionFingerprint(subscription);
-      Object.assign(state, view.state);
-      renderUsageMeters();
-      root.title = view.title;
-      img.alt = view.alt;
-      if (changed) {
-        window.dispatchEvent(new CustomEvent('whale-balance', { detail: subscription }));
-        refreshOpenNormalBubble();
-      }
-      return true;
-    }
-    function refreshSubscriptionQuota() {
-      usageClient.pollQuota().then(function (result) {
-        if (!result) return;
-        if (result.kind === 'subscription' && applySubscriptionQuota(result.data)) return;
-        if (state.subscription !== null) {
-          state.subscription = null;
-          refresh(false);
-        }
-      }).catch(function () {});
-    }
-    function renderUsageMeters() {
-      try {
-        var meters = WhaleUsagePresentation.usageMeters(state);
-        var key = JSON.stringify(meters);
-        if (key === meterKey) return;
-        meterKey = key;
-        meterBox.textContent = '';
-        meters.forEach(function (meter) {
-          var row = document.createElement('div');
-          row.className = 'dshwv-meter-row dshwv-meter-' + meter.level;
-          var label = document.createElement('span');
-          label.textContent = meter.label;
-          var track = document.createElement('div');
-          track.className = 'dshwv-meter-track';
-          var fill = document.createElement('div');
-          fill.className = 'dshwv-meter-fill';
-          fill.style.width = meter.percent + '%';
-          track.appendChild(fill);
-          row.appendChild(label);
-          row.appendChild(track);
-          meterBox.appendChild(row);
-        });
-        meterBox.hidden = !meters.length;
-        placeUsageMeters();
-        WhaleRendering.presentFor(200);
-      } catch (err) {}
-    }
-    // Where the visible pet ends, from its alpha mask; null until the mask is decoded.
-    function petBottomEdge() {
-      var mask = WhaleRendering.hitCache.maskOf(img);
-      if (!mask) return null;
-      if (!petEdges.has(mask)) petEdges.set(mask, WhalePetGeometry.bottomEdge(mask));
-      return petEdges.get(mask);
-    }
-    // As wide as the pet's bottom edge and just under it, in whole pixels so text
-    // stays sharp; inside the bottom of the pet when the screen edge leaves no room.
-    function placeUsageMeters() {
-      if (!meterBox || meterBox.hidden) return;
-      var size = root.offsetWidth || 0;
-      if (!size) return;
-      var box = size * 0.5945, boxStart = size - box, edge = petBottomEdge() || { left: 0, right: 1, bottom: 1 };
-      var left = Math.round(boxStart + edge.left * box), right = Math.round(boxStart + edge.right * box);
-      var bottom = Math.round(boxStart + edge.bottom * box);
-      meterBox.style.fontSize = Math.max(9, Math.min(13, Math.round(size * 0.05))) + 'px';
-      meterBox.style.setProperty('--dshw-meter-bar', Math.max(4, Math.min(8, Math.round(size * 0.025))) + 'px');
-      meterBox.style.left = left + 'px';
-      meterBox.style.width = Math.max(48, right - left) + 'px';
-      var height = meterBox.offsetHeight;
-      meterBox.style.top = (state.top + bottom + 3 + height <= viewport().h ? bottom + 3 : bottom - height - 3) + 'px';
+    var quotaSnapshot = null, quotaAccount = null, quotaKey = '';
+    // Shows the quota book's current account: the state the bubbles read, the
+    // title, and the snapshot for the view under the pet.
+    function applyQuotas(snapshot) {
+      quotaSnapshot = snapshot;
+      var account = WhaleQuotaPresentation.current(snapshot);
+      quotaAccount = account;
+      window.dispatchEvent(new CustomEvent('whale-quotas', { detail: snapshot }));
+      var key = JSON.stringify(account);
+      if (key === quotaKey) return;
+      quotaKey = key;
+      Object.assign(state, WhaleQuotaPresentation.bubbleState(account));
+      if (account && account.type === 'api' && state.currency) WhaleMoney.setNativeCurrency(state.currency);
+      var note = account ? WhaleQuotaPresentation.status(account) : '';
+      root.title = account ? WhaleQuotaPresentation.title(account) + (note ? ' · ' + note : '') : '额度';
+      img.alt = WhaleQuotaPresentation.label(account);
+      if (account && account.type === 'api' && account.available) checkUsageAlerts(state.balance, state.todayUsage);
+      refreshOpenNormalBubble();
     }
     function express() {
       positioner.style.transform = 'translate3d(' + state.left + 'px,' + state.top + 'px,0)';
       root.classList.toggle('dshwv-left', !!state.flip);
-      placeUsageMeters();
+      petLayout();
       WhaleRendering.presentFor(drag && drag.active ? 0 : 200);
     }
     function settle() {
@@ -9369,63 +9285,19 @@
         cy: cy
       };
     }
-    function showUsageSource(source) {
-      syncSourceButtons();
-      state.subscription = null; state.balance = null; state.balanceText = ''; state.todayUsage = null;
-      state.status = 'loading'; state.message = '';
-      renderUsageMeters();
-      root.title = source === 'claude' ? 'Claude 订阅额度 · 等待更新' : 'Codex 用量';
-      refreshOpenNormalBubble();
-      if (busy) refreshQueued = true; else refresh(false);
-    }
-    var refreshQueued = false;
+    var refreshQueued = false, refreshManual = false;
+    // Reads the quota book. A manual refresh has the runtime query every API
+    // account first; reads asked for meanwhile run once afterwards.
     function refresh(manual) {
+      if (manual) refreshManual = true;
       if (busy) { refreshQueued = true; return; }
       busy = true;
-      if (manual || !hasBalanceDisplay(state) && !hasSubscriptionQuota()) state.status = 'loading';
-      usageClient.overview({
-        manual: !!manual,
-        getSubscription: function () { return state.subscription; },
-        onBalanceFallback: function () { state.subscription = null; }
-      }).then(function (result) {
-        if (!result) return;
-        if (result.kind === 'missing') {
-          state.subscription = null; state.balance = null; state.balanceText = ''; state.todayUsage = null;
-          state.status = 'error'; state.message = '等待 Claude 回复后更新';
-          root.title = 'Claude 订阅额度 · 等待更新'; img.alt = 'Claude 订阅额度待更新';
-          refreshOpenNormalBubble();
-          return;
-        }
-        if (result.kind === 'subscription') { applySubscriptionQuota(result.data); return; }
-        if (result.kind === 'retained-subscription') {
-          state.status = 'ok';
-          return;
-        }
-        var data = result.data;
-        var view = WhaleUsagePresentation.balance(data);
-        Object.assign(state, view.state);
-        if (data && data.ok) {
-          WhaleMoney.setNativeCurrency(state.currency);
-          root.title = view.title;
-          img.alt = view.alt;
-          window.dispatchEvent(new CustomEvent('whale-balance', {
-            detail: data
-          }));
-          checkUsageAlerts(state.balance, state.todayUsage);
-        } else {
-          window.dispatchEvent(new CustomEvent('whale-balance', {
-            detail: data || ({
-              ok: false
-            })
-          }));
-        }
-      }).catch(function () {
-        if (!hasSubscriptionQuota()) {
-          Object.assign(state, WhaleUsagePresentation.balance(null).state);
-        }
+      var forced = refreshManual;
+      refreshManual = false;
+      usageClient.quotas({ manual: forced }).then(applyQuotas).catch(function () {
+        if (!quotaAccount) Object.assign(state, WhaleQuotaPresentation.bubbleState(null), { status: 'error', message: '额度暂时无法读取' });
       }).finally(function () {
         busy = false;
-        renderUsageMeters();
         if (refreshQueued) { refreshQueued = false; refresh(false); }
       });
     }
@@ -11653,9 +11525,10 @@
         place: function (x, y, flip) { state.left = x; state.top = y; state.flip = !!flip; express(); },
         scale: setScale, role: applyRole,
         scene: function (modules, ttl) { sceneOpen('custom', function () { bubbleRenderModules(modules); }, ttl || 0); },
-        status: function () { return { switching: bubbleFrames.switching, busy: busy, shown: bubbleShown, scene: bubbleScene && bubbleScene.kind, epoch: bubbleSceneEpoch, balance: state.balance, today: state.todayUsage, status: state.status, front: bubbleFrames.front.root.dataset.buffer, randomPicks: bubbleFrames.front.root.innerText, hitCache: Object.assign({}, WhaleRendering.hitCache.stats), scale: state.scale, flip: state.flip }; }
+        status: function () { return { switching: bubbleFrames.switching, busy: busy, shown: bubbleShown, scene: bubbleScene && bubbleScene.kind, epoch: bubbleSceneEpoch, balance: state.balance, today: state.todayUsage, status: state.status, account: quotaAccount && quotaAccount.id, front: bubbleFrames.front.root.dataset.buffer, randomPicks: bubbleFrames.front.root.innerText, hitCache: Object.assign({}, WhaleRendering.hitCache.stats), scale: state.scale, flip: state.flip }; }
       });
     }
+    usageClient.migrateChoice().then(function (result) { if (result) refresh(false); });
     fetch(SIZE_URL, {
       cache: 'no-store'
     }).then(function (r) {
@@ -11737,12 +11610,13 @@
     });
     setInterval(function () {
       refresh(false);
-    }, REFRESH_MS);
-    setInterval(function () {
-      refreshSubscriptionQuota();
-    }, SUBSCRIPTION_POLL_MS);
+    }, QUOTA_POLL_MS);
     window.addEventListener('whale-refresh', function () {
       refresh(true);
+    });
+    window.addEventListener('whale-quotas-changed', function () { refresh(false); });
+    window.addEventListener('whale-quotas-request', function () {
+      if (quotaSnapshot) window.dispatchEvent(new CustomEvent('whale-quotas', { detail: quotaSnapshot }));
     });
     window.addEventListener('whale-open-usage', function () {
       if (!menuOpen) toggleMenu();
@@ -11754,10 +11628,12 @@
           var notice = WhaleTurnNotice.snapshot(record, state.currency);
           if (notice.completionKind === 'success') playTaskEndSound();
           showCostBubble(notice.amount, notice);
+          refresh(false);
         },
         claude: function (record) {
           playTaskEndSound();
           showClaudeTurnBubble(record.subscription);
+          refresh(false);
         }
       });
     }

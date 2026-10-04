@@ -25,16 +25,17 @@
     const at = typeof published === 'number' ? published : Date.parse(published);
     return !firstPoll || Number.isFinite(at) && at >= startedAt;
   }
-  function rateWindow(value, expectedMinutes) {
+  // The runtime checked the windows; a window that has reset arrives as null.
+  function rateWindow(value) {
     const remainingPercent = Number(value?.remainingPercent), usedPercent = Number(value?.usedPercent);
     const resetsAt = typeof value?.resetsAt === 'string' && Number.isFinite(Date.parse(value.resetsAt)) ? value.resetsAt : null;
-    if (!Number.isFinite(remainingPercent) || !Number.isFinite(usedPercent) || value?.windowMinutes !== expectedMinutes || !resetsAt) return null;
+    if (!Number.isFinite(remainingPercent) || !Number.isFinite(usedPercent) || !resetsAt) return null;
     return Object.freeze({ usedPercent: Math.max(0, Math.min(100, usedPercent)), remainingPercent: Math.max(0, Math.min(100, remainingPercent)),
-      windowMinutes: expectedMinutes, resetsAt });
+      windowMinutes: value.windowMinutes, resetsAt });
   }
   function subscriptionRateLimits(value) {
-    const fiveHour = rateWindow(value?.fiveHour, 300), sevenDay = rateWindow(value?.sevenDay, 10080);
-    if (!fiveHour || !sevenDay) return null;
+    const fiveHour = rateWindow(value?.fiveHour), sevenDay = rateWindow(value?.sevenDay);
+    if (!fiveHour && !sevenDay) return null;
     return Object.freeze({ planType: typeof value.planType === 'string' ? value.planType.slice(0, 64) : '', fiveHour, sevenDay });
   }
   function snapshot(record, nativeCurrency = 'USD') {

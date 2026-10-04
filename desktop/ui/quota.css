@@ -1,0 +1,41 @@
+/* The quota under the pet, and the overview of every account behind its ▾. */
+.dshwv-meter{position:absolute;left:40.55%;top:100%;width:59.45%;box-sizing:border-box;padding:3px 6px;display:flex;flex-direction:column;gap:3px;pointer-events:none;background:rgba(255,255,255,.92);border-radius:6px;box-shadow:0 0 0 1px rgba(47,85,86,.25);font:600 10px/1 system-ui,sans-serif;color:#2f5556;-webkit-font-smoothing:antialiased}
+.dshwv-meter[hidden]{display:none}
+.dshwv-root.dshwv-left .dshwv-meter{transform:scaleX(-1)}
+.dshwv-meter-head{display:flex;align-items:center;gap:3px;width:100%;min-width:0;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;line-height:1.1;cursor:pointer;pointer-events:auto;text-align:left}
+.dshwv-meter-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshwv-meter-caret{flex:none;opacity:.7}
+.dshwv-meter-head[aria-expanded="true"] .dshwv-meter-caret{transform:rotate(180deg)}
+.dshwv-meter-bars{display:flex;flex-direction:column;gap:3px}
+.dshwv-meter-bars:empty{display:none}
+.dshwv-meter-row{display:flex;align-items:center;gap:4px}
+.dshwv-meter-row span{min-width:1.4em}
+.dshwv-meter-track{flex:1;height:var(--dshw-meter-bar,5px);border-radius:4px;background:rgba(255,255,255,.8);box-shadow:inset 0 0 0 1px rgba(47,85,86,.35);overflow:hidden}
+.dshwv-meter-fill{height:100%;border-radius:4px;background:#3fb68b}
+.dshwv-meter-warn .dshwv-meter-fill{background:#e0a32e}
+.dshwv-meter-low .dshwv-meter-fill{background:#e05a4f}
+
+.quota-overview{position:fixed;z-index:10120;width:min(330px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;padding:10px 12px;background:#fff;border:1px solid #b6c0d9;border-radius:8px;box-shadow:0 4px 18px #20317026;color:#203170;font-size:12px;pointer-events:auto;user-select:text;-webkit-user-select:text}
+.quota-overview[hidden]{display:none}
+.quota-overview-head{display:flex;align-items:center;margin-bottom:6px}
+.quota-overview-head strong{font-size:13px;margin-right:auto}
+.quota-overview-head button{width:22px;height:22px;padding:0;border:0;background:none;color:#536ba9;font-size:18px;line-height:1}
+.quota-account{padding:8px 0;border-top:1px solid #edf0f6}
+.quota-account:first-of-type{border-top:0;padding-top:2px}
+.quota-account-top{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.quota-account-top strong{flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.quota-current{flex:none;font-size:11px;color:#3a8f6f}
+.quota-select{flex:none;padding:2px 7px;border:1px solid #c9d3e8;border-radius:6px;background:#fff;color:#536ba9;font-size:11px}
+.quota-row{display:grid;grid-template-columns:2.6em 1fr auto;align-items:center;gap:6px;margin:3px 0;font-variant-numeric:tabular-nums}
+.quota-row-label{color:#536ba9}
+.quota-row-track{height:6px;border-radius:4px;background:#edf0f6;overflow:hidden}
+.quota-row-fill{height:100%;border-radius:4px;background:#3fb68b}
+.quota-row-warn .quota-row-fill{background:#e0a32e}
+.quota-row-low .quota-row-fill{background:#e05a4f}
+.quota-row-value{white-space:nowrap}
+.quota-row-note{grid-column:2/4;margin-top:-2px;color:#7b8aa8;font-size:11px}
+.quota-row-note:empty{display:none}
+.quota-pace,.quota-status{margin:4px 0 0;font-size:11px;line-height:1.35;color:#536ba9}
+.quota-status{color:#a5604f}
+.quota-overview-foot{display:flex;justify-content:flex-end;padding-top:8px;border-top:1px solid #edf0f6}
+.quota-manage{padding:4px 10px;border:1px solid #c9d3e8;border-radius:6px;background:#fff;color:#536ba9;font-size:12px}

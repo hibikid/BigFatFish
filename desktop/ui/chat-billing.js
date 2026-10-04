@@ -1,11 +1,17 @@
-const decimals = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 6 });
 const costDecimals = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-export function formatChatCost({ min, max, currency }) {
-  return (currency === 'USD' ? '$' : '¥') + costDecimals.format((min + max) / 2);
-}
+// Amounts follow the pet's display currency; without an exchange rate they stay in their own.
 function money(amount, currency) {
-  const symbol = currency === 'USD' ? '$' : '¥';
-  return amount > 0 && amount < 0.000001 ? '<' + symbol + '0.000001' : symbol + decimals.format(amount);
+  const display = globalThis.WhaleMoney;
+  if (display && display.convert(amount, currency) !== null) return display.formatMoney(amount, currency);
+  return (currency === 'USD' ? '$' : '¥') + costDecimals.format(amount);
+}
+export function formatChatCost({ min, max, currency }) {
+  return money((min + max) / 2, currency);
+}
+// Writes a text that is redrawn when the display currency changes.
+function show(element, text) {
+  const display = globalThis.WhaleMoney;
+  if (display) display.bind(element, text); else element.textContent = text();
 }
 
 export function createChatBilling({ client, root }) {
@@ -14,15 +20,12 @@ export function createChatBilling({ client, root }) {
   let revision = 0;
   function render(value) {
     const unknown = value.unknown + value.pending;
-    if (value.ledgerError || !value.supported || !value.configured) spent.textContent = '本地30天 --';
-    else if (unknown && !value.recorded) spent.textContent = '本地30天待核';
-    else {
-      const amount = formatChatCost(value);
-      spent.textContent = (unknown ? '本地30天已计约 ' : '本地30天约 ') + amount;
-    }
+    if (value.ledgerError || !value.supported || !value.configured) show(spent, () => '本地30天 --');
+    else if (unknown && !value.recorded) show(spent, () => '本地30天待核');
+    else show(spent, () => (unknown ? '本地30天已计约 ' : '本地30天约 ') + formatChatCost(value));
     spent.title = value.ledgerError || (value.supported ? '当前会话密钥近30天的本地用量估算，含可恢复的历史记录；不是官网账号总消费。' +
       (unknown ? '另有 ' + unknown + ' 次调用尚无完整计费数据。' : '') : '目前仅支持 DeepSeek 官方会话 API 计费');
-    balance.textContent = value.balance ? (value.balanceStale ? '余额（旧）' : '余额 ') + money(value.balance.amount, value.balance.currency) : '余额 --';
+    show(balance, () => value.balance ? (value.balanceStale ? '余额（旧）' : '余额 ') + money(value.balance.amount, value.balance.currency) : '余额 --');
     balance.title = value.balanceError || (value.balance ? 'DeepSeek 账号余额，含充值及有效赠金；更新于 ' + new Date(value.balance.updatedAt).toLocaleString() : '尚未查询余额');
   }
   async function update({ force = false } = {}) {
@@ -32,9 +35,9 @@ export function createChatBilling({ client, root }) {
       const result = await client.billing(force);
       if (current === revision) render(result.billing);
     } catch {
-      if (current === revision) { spent.textContent = '本地30天 --'; balance.textContent = '余额 --'; spent.title = balance.title = '会话计费数据读取失败，请刷新'; }
+      if (current === revision) { show(spent, () => '本地30天 --'); show(balance, () => '余额 --'); spent.title = balance.title = '会话计费数据读取失败，请刷新'; }
     } finally { if (current === revision) refresh.disabled = false; }
   }
   refresh.addEventListener('click', () => update({ force: true }));
-  return Object.freeze({ refresh: update, reset() { revision++; spent.textContent = '本地30天 --'; balance.textContent = '余额 --'; spent.title = ''; balance.title = ''; refresh.disabled = false; } });
+  return Object.freeze({ refresh: update, reset() { revision++; show(spent, () => '本地30天 --'); show(balance, () => '余额 --'); spent.title = ''; balance.title = ''; refresh.disabled = false; } });
 }

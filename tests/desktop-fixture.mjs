@@ -19,7 +19,7 @@ export async function makeFixture(dataDir) {
   // Balances, the pet's included, are read through the quota book's service.
   const service = new WhaleService({ config, fetchImpl: async url => url === 'https://api.deepseek.com/user/balance' ?
     Response.json({ is_available: true, balance_infos: [
-      { currency: 'CNY', total_balance: (110 - completedChatCalls * 0.001).toFixed(3), granted_balance: '10', topped_up_balance: '100' }
+      { currency: 'CNY', total_balance: (110 - completedChatCalls * 0.5).toFixed(2), granted_balance: '10', topped_up_balance: '100' }
     ] }) : Response.json({ balance: 12.3456 }) });
   const chatFetchImpl = async (url, { body, signal }) => {
     const input = JSON.parse(body), last = input.messages.at(-1).content.replace(/^\[[^\]]+\] /, '');
@@ -88,6 +88,8 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     throw new Error(message + ': ' + JSON.stringify({ state, errors }));
   }
   const status = () => js('window.__whaleRenderTest.status()');
+  // A CNY amount as the page shows it: in the display currency once a rate is known, else as yuan.
+  const shown = amount => `(WhaleMoney.convert(${amount}, 'CNY') === null ? '¥' + (${amount}).toFixed(2) : WhaleMoney.formatMoney(${amount}, 'CNY'))`;
   const saved = () => dispatcher.whale.readUsageSettings().approvalSound;
   const row = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('审批提醒音效'))";
   const timerRow = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('番茄钟提醒音效'))";
@@ -183,9 +185,9 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await click('.dshwv-img', 'right');
     await until("document.activeElement === document.getElementById('chat-input') && !document.getElementById('chat-composer').hidden", 'chat did not focus after restart');
     await until("document.getElementById('chat-output').textContent.includes('专注三十分钟')", 'chat history did not survive restart');
-    await until("document.querySelector('[data-chat-spent]').textContent.includes('约') && document.querySelector('[data-chat-balance]').textContent.includes('¥110')", 'chat billing did not survive restart');
+    await until("document.querySelector('[data-chat-spent]').textContent.includes('约') && document.querySelector('[data-chat-balance]').textContent.endsWith(" + shown('110') + ")", 'chat billing did not survive restart');
     assert.ok(JSON.parse((await dispatcher.dispatch('/api/chat/billing')).body).billing.recorded > 0);
-    assert.equal(await js("document.querySelector('[data-chat-spent]').textContent.match(/¥\\d+\\.\\d{2}$/) !== null"), true);
+    assert.equal(await js("document.querySelector('[data-chat-spent]').textContent.match(/[¥$]\\d+\\.\\d{2}$/) !== null"), true, 'chat cost shows two decimals in the display currency');
     await until("!document.getElementById('chat-timer').hidden && document.getElementById('chat-timer').textContent.includes('专注 1/2')", 'Pomodoro did not resume after restart');
     assert.equal(JSON.parse((await dispatcher.dispatch('/api/chat/activity/settings')).body).settings.enabled, true);
     await js("document.getElementById('chat-close').click()");
@@ -226,7 +228,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
     window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
     await until("document.getElementById('chat-output').textContent.includes('第二行回复') && document.getElementById('chat-stop').hidden", 'Enter did not stream reply');
-    await until("document.querySelector('[data-chat-spent]').textContent.includes('约') && document.querySelector('[data-chat-balance]').textContent.includes('¥109.999')", 'chat cost and balance did not refresh after reply');
+    await until("document.querySelector('[data-chat-spent]').textContent.includes('约') && document.querySelector('[data-chat-balance]').textContent.endsWith(" + shown('109.5') + ")", 'chat cost and balance did not refresh after reply');
     const billed = JSON.parse((await dispatcher.dispatch('/api/chat/billing')).body).billing;
     assert.equal(billed.recorded, 1); assert.ok(billed.min > 0); assert.equal(billed.unknown, 0);
     await capture('chat-short-reply');
@@ -299,7 +301,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await js("document.getElementById('chat-input').value = 'continue original topic'; document.getElementById('chat-input').dispatchEvent(new Event('input')); document.getElementById('chat-send').click();");
     await until("document.getElementById('chat-stop').hidden && !document.getElementById('chat-new').disabled", 'resumed conversation did not finish');
     assert.equal(JSON.parse((await dispatcher.dispatch('/api/chat/history')).body).turns.length, firstConversation.turns.length + 1);
-    assert.equal(await js("document.querySelector('[data-chat-spent]').textContent.match(/¥\\d+\\.\\d{2}$/) !== null"), true);
+    assert.equal(await js("document.querySelector('[data-chat-spent]').textContent.match(/[¥$]\\d+\\.\\d{2}$/) !== null"), true, 'chat cost shows two decimals in the display currency');
     await capture('chat-conversation-list');
     const originalBounds = window.getBounds();
     for (const [width, height] of [[1024, 768], [390, 844]]) {
@@ -386,18 +388,21 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
       sevenDay: { usedPercent: 60, windowMinutes: 10080, resetsAt: now + 86400000 } };
     dispatcher.whale.updateSubscriptionRateLimits(rateLimits);
     dispatcher.whale.updateSubscriptionRateLimitContext({ observedAt: now, usesSubscription: true });
+    // A Codex turn on the subscription makes it the account in use.
+    dispatcher.book.codexTurn({ ts: now, subscription: true });
     await js('window.__whaleRenderTest.refresh(true)');
-    await until("document.querySelector('.dshwv-root').title.includes('Codex 订阅额度')", 'subscription did not replace API display');
+    await until("document.querySelector('.dshwv-root').title.includes('Codex 订阅') && window.__whaleRenderTest.status().account === 'codex'", 'subscription did not replace API display');
     await until(`JSON.stringify(${meterRows}) === '["5h:75%","7d:40%"]'`, 'the meter did not switch to the 5h and 7d quota');
-    passed.push('the usage meter shows remaining 5h and 7d quota for a subscription');
+    assert.equal(await js("document.querySelector('.dshwv-meter-name').textContent"), 'Codex', 'the meter names the account in use');
+    passed.push('the usage meter shows remaining 5h and 7d quota for a subscription and names it');
     saveClaudeUsage(dataDir, { rate_limits: { five_hour: { used_percentage: 20, resets_at: Math.floor(now / 1000) + 3600 },
       seven_day: { used_percentage: 65, resets_at: Math.floor(now / 1000) + 86400 } } }, now);
     window.webContents.reload();
-    await until("!!window.__whaleRenderTest && document.querySelector('[data-source=claude]')?.getAttribute('aria-pressed') === 'true'", 'recent Claude status line snapshot did not select Claude on startup');
+    await until("!!window.__whaleRenderTest && window.__whaleRenderTest.status().account === 'codex'", 'a reload lost the account in use');
     await js('window.__playedAudio = []; HTMLMediaElement.prototype.play = function () { window.__playedAudio.push(this.src); return Promise.resolve(); }; undefined;');
     saveClaudeTurn(dataDir, { hook_event_name: 'Stop', session_id: 'fixture' }, now + 1000);
     await js('window.__whaleRenderTest.poll()');
-    await until("document.querySelector('.dshwv-root').title.includes('Claude 订阅额度') && document.querySelector('[data-source=claude]').getAttribute('aria-pressed') === 'true'", 'Claude source did not become active');
+    await until("document.querySelector('.dshwv-root').title.includes('Claude 订阅') && window.__whaleRenderTest.status().account === 'claude'", 'a Claude reply did not make Claude the account in use');
     await until("window.__whaleRenderTest.status().scene === 'cost' && !window.__whaleRenderTest.status().switching && Number(getComputedStyle(document.querySelector('.dshwv-pop-open .dshwv-bshape')).opacity) > 0.99 && Number(getComputedStyle(document.querySelector('.dshwv-pop-open .dshwv-text')).opacity) > 0.99 && [...document.querySelectorAll('.dshwv-pop-open .dshwv-frame')].some(el => el.innerText.includes('Claude 回复完成') && el.innerText.includes('5小时剩余80%') && Number(getComputedStyle(el).opacity) > 0.99)", 'Claude reply did not open a visible completion bubble');
     assert.equal((await measureLayout('claude-completion')).fits, true, 'Claude completion must fit the visible bubble');
     assert.equal(await js("window.__whaleRenderTest.status().scene === 'cost' && document.querySelector('.dshwv-pop').classList.contains('dshwv-pop-open')"), true,
@@ -408,12 +413,18 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     assert.equal((await measureLayout('claude-quota')).fits, true, 'Claude quota rows must fit the visible bubble');
     await js('window.__whaleRenderTest.close()');
     fs.rmSync(path.join(dataDir, 'claude-subscription.json'));
-    await js('window.__whaleRenderTest.refresh(true)');
-    await until("document.querySelector('.dshwv-root').title.includes('Claude 订阅额度 · 等待更新')", 'missing Claude quota should be unknown');
-    await js("document.querySelector('[data-source=codex]').click()");
-    await until("document.querySelector('.dshwv-root').title.includes('Codex 订阅额度') && document.querySelector('[data-source=codex]').getAttribute('aria-pressed') === 'true'", 'Codex source did not recover after Claude');
-    passed.push('Claude completion auto-selects its quota, opens a completion bubble, and click shows the latest Claude usage');
-    passed.push('Claude and Codex quota sources stay independent and missing Claude data is unknown');
+    await js('window.__whaleRenderTest.refresh(false)');
+    await until("document.querySelector('.dshwv-root').title.includes('Claude 订阅 · 等 Claude 下次回复后更新')", 'missing Claude quota should be unknown');
+    await click('.dshwv-meter-head');
+    await until("!document.querySelector('.quota-overview').hidden && !!document.querySelector('.quota-account[data-account-id=codex] .quota-select')", 'the meter did not open the quota overview');
+    assert.deepEqual(await js("[...document.querySelectorAll('.quota-account')].map(card => card.dataset.accountId).slice(0, 2)"), ['codex', 'claude']);
+    await capture('quota-overview');
+    await click('.quota-account[data-account-id=codex] .quota-select');
+    await until("window.__whaleRenderTest.status().account === 'codex' && document.querySelector('.dshwv-root').title.includes('Codex 订阅')", 'choosing Codex in the overview did not switch the pet');
+    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))");
+    await until("document.querySelector('.quota-overview').hidden", 'Escape did not close the overview');
+    passed.push('a Claude reply makes Claude the account in use, opens a completion bubble, and click shows the latest Claude usage');
+    passed.push('missing Claude quota reads as waiting, and the overview behind the meter lists every account and switches to the one chosen');
     await click('.dshwv-img');
     await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('5小时剩余75%') && Number(getComputedStyle(el).opacity) > 0.99)", 'native subscription click did not become visible');
     await measureLayout('subscription-native-click');
@@ -423,7 +434,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     ] }] } });
     assert.equal(profile.status, 200);
     window.webContents.reload();
-    await until("!!window.__whaleRenderTest && document.querySelector('.dshwv-root').title.includes('Codex 订阅额度')", 'subscription profile did not load after reload');
+    await until("!!window.__whaleRenderTest && document.querySelector('.dshwv-root').title.includes('Codex 订阅')", 'subscription profile did not load after reload');
     await js('window.__playedAudio = []; HTMLMediaElement.prototype.play = function () { window.__playedAudio.push(this.src); return Promise.resolve(); }; undefined;');
     await click('.dshwv-img');
     await until("!window.__whaleRenderTest.status().switching && window.__whaleRenderTest.status().randomPicks.includes('7天剩余40%') && [...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => Number(getComputedStyle(el).opacity) > 0.99)", 'size-8 subscription click did not become visible');
@@ -449,9 +460,6 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('5小时剩余75%') && Number(getComputedStyle(el).opacity) > 0.99)", 'subscription text did not become visible');
     await measureLayout('subscription-forced-normal');
     await js('window.__whaleRenderTest.close()');
-    dispatcher.whale.updateSubscriptionRateLimitContext({ observedAt: now + 1, usesSubscription: false });
-    await js('window.__whaleRenderTest.refresh(true)');
-    await until("document.querySelector('.dshwv-root').title.includes('自定义 API 余额')", 'API fallback did not restore display');
     const completed = { id: 'fixture:completed', sessionId: 'fixture', turnId: 'completed', ts: Date.now(),
       byModel: { 'test-model': { input_tokens: 100, cached_input_tokens: 0, output_tokens: 20 } } };
     dispatcher.whale.beginTurn(completed);
@@ -461,7 +469,8 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('待记账') && Number(getComputedStyle(el).opacity) > 0.99)", 'task cost text did not become visible');
     await capture('task-cost-display');
     await js('window.__whaleRenderTest.close()');
-    passed.push('real usage requests switch subscription/API display and map a completion to a pending-cost bubble');
+    await until("window.__whaleRenderTest.status().account !== 'codex' && document.querySelector('.dshwv-root').title.includes('Codex API')", 'a turn on the API did not make its account current');
+    passed.push('a Codex turn makes the account it ran on current, and a turn on the API maps to a pending-cost bubble');
 
     await js(`(${timerRow}).querySelector('input').click()`);
     for (let i = 0; dispatcher.whale.readUsageSettings().pomodoroSound.on && i < 50; i++) await delay(100);

@@ -124,6 +124,10 @@ export class QuotaBook {
     })).finally(() => { this.refreshing = null; });
     return this.refreshing;
   }
+  // Queries any account not queried yet, so a first read has something to show.
+  async fill() {
+    if (this.apiAccounts().accounts.some(account => !this.balances.has(account.id))) await this.refresh();
+  }
   // The pet account's balance for chat billing, through the same query and
   // cache as every other account.
   async petBalance({ baseUrl, key }) {

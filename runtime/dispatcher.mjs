@@ -66,6 +66,7 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
       if (url.pathname === '/api/status' && method === 'GET') return jsonResult(200, { ok: true, version: VERSION, buildVersion, transport: 'local-ipc', webpage: false, provider: whale.config.publicInfo(), monitor: watcher?.status() || { watching: 0, activeTurns: 0 }, subscriptionRateLimits: whale.subscriptionRateLimits(), dataDir, ...statusInfo() });
       if (url.pathname === '/api/quotas' && method === 'GET') {
         if (url.searchParams.get('refresh') === '1') await book.refresh({ force: true });
+        else await book.fill();
         return jsonResult(200, book.snapshot());
       }
       if (url.pathname === '/api/quotas/current' && method === 'PUT') {
@@ -128,7 +129,7 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
       }
       if (url.pathname === '/api/show' && method === 'POST') { onShow(); return jsonResult(200, { ok: true, desktop: 'shown' }); }
       if (url.pathname === '/api/stop' && method === 'POST') { setTimeout(onStop, 100); return jsonResult(200, { ok: true }); }
-      const uiFiles = { '/': 'widget.html', '/widget.html': 'widget.html', '/client.js': 'client.js', '/ui.css': 'ui.css', '/render.js': 'render.js', '/input.js': 'input.js', '/alpha-worker.js': 'alpha-worker.js', '/money.js': 'money.js', '/media-guard.js': 'media-guard.js', '/turn-notice.js': 'turn-notice.js', '/usage-client.js': 'usage-client.js', '/bubble-queue.js': 'bubble-queue.js', '/pet-geometry.js': 'pet-geometry.js', '/usage-presentation.js': 'usage-presentation.js', '/companion-display.js': 'companion-display.js', '/chat.js': 'chat.js', '/chat-client.js': 'chat-client.js', '/chat-billing.js': 'chat-billing.js', '/chat.css': 'chat.css' };
+      const uiFiles = { '/': 'widget.html', '/widget.html': 'widget.html', '/client.js': 'client.js', '/ui.css': 'ui.css', '/render.js': 'render.js', '/input.js': 'input.js', '/alpha-worker.js': 'alpha-worker.js', '/money.js': 'money.js', '/media-guard.js': 'media-guard.js', '/turn-notice.js': 'turn-notice.js', '/usage-client.js': 'usage-client.js', '/bubble-queue.js': 'bubble-queue.js', '/pet-geometry.js': 'pet-geometry.js', '/usage-presentation.js': 'usage-presentation.js', '/quota-presentation.js': 'quota-presentation.js', '/quota-view.js': 'quota-view.js', '/quota.js': 'quota.js', '/quota.css': 'quota.css', '/companion-display.js': 'companion-display.js', '/chat.js': 'chat.js', '/chat-client.js': 'chat-client.js', '/chat-billing.js': 'chat-billing.js', '/chat.css': 'chat.css' };
       let file;
       if (Object.hasOwn(uiFiles, url.pathname)) file = path.join(ROOT, 'desktop', 'ui', uiFiles[url.pathname]);
       else if (url.pathname === '/lib/event-stream.js' || /^\/vendor\/eventsource-parser\/dist\/(index|parse|errors|types|stream)\.js$/.test(url.pathname)) file = path.join(ROOT, url.pathname.slice(1));

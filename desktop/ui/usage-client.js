@@ -5,44 +5,17 @@
   else host.WhaleUsageClient = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
-  const SOURCES = ['codex', 'claude'];
-  const QUOTA_URL = { codex: '/api/subscription-rate-limits', claude: '/api/claude/subscription' };
-  // Owns the usage source the pet shows. Codex shows its subscription quota,
-  // else the API balance; Claude shows only its subscription quota. The source
-  // with the latest activity is shown; a manual choice holds until a later one.
-  // Every read reports the source it was made for and yields null once another
-  // source is shown, so callers never apply one source's data to another.
-  function create({ fetchImpl, acceptsSubscription, shouldNotify, storage, now = Date.now, timeoutMs = 25000, onSource = () => {} } = {}) {
+  // Reads the quota book and the two completion streams for the pet. The book
+  // decides which account is shown; this client only reads it, under a
+  // deadline, and hands a choice back to it.
+  function create({ fetchImpl, shouldNotify, storage, now = Date.now, timeoutMs = 25000 } = {}) {
     const load = key => { try { return storage?.getItem(key) || ''; } catch { return ''; } };
     const save = (key, value) => { try { storage?.setItem(key, value); } catch {} };
-    const forget = key => { try { storage?.removeItem(key); } catch {} };
     let seq = Number(load('dshw-last-seq') || 0), id = load('dshw-last-turn-id'), aligned = false, codexJob = null;
-    let claudeId = load('dshw-last-claude-turn-id'), claudeAligned = false, claudeJob = null;
-    let current = load('dshw-display-source') === 'claude' ? 'claude' : 'codex';
-    let lastActivityAt = Number(load('dshw-display-source-manual-at') || 0), quotaJob = null, snapshotChecked = false;
+    let claudeId = load('dshw-last-claude-turn-id'), claudeAligned = false, claudeJob = null, quotaJob = null;
     if (!Number.isFinite(seq) || seq < 0) seq = 0;
-    if (!Number.isFinite(lastActivityAt) || lastActivityAt < 0) lastActivityAt = 0;
     const startedAt = now();
 
-    function show(source) {
-      if (source === current) return;
-      current = source;
-      save('dshw-display-source', source);
-      onSource(source);
-    }
-    function consider(source, timestamp) {
-      const at = typeof timestamp === 'number' ? timestamp : Date.parse(timestamp);
-      if (!Number.isFinite(at) || at <= lastActivityAt) return;
-      lastActivityAt = at;
-      forget('dshw-display-source-manual-at');
-      show(source);
-    }
-    function select(source) {
-      if (!SOURCES.includes(source)) return;
-      lastActivityAt = now();
-      save('dshw-display-source-manual-at', String(lastActivityAt));
-      show(source);
-    }
     async function request(url, { signal, method = 'GET', body } = {}) {
       const response = await fetchImpl(url, { cache: 'no-store', signal, method,
         ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
@@ -54,43 +27,31 @@
       try { return await work(controller.signal); }
       finally { clearTimeout(timer); }
     }
-    const quotaKind = data => acceptsSubscription(data) ? 'subscription' : 'missing';
-    // One refresh of the shown source, under one deadline. Codex tries its
-    // quota first and falls back to the API balance; a temporary quota failure
-    // keeps a quota already on display.
-    function overview({ manual = false, getSubscription = () => null, onBalanceFallback = () => {} } = {}) {
-      const source = current, shown = () => current === source;
-      return deadline(async signal => {
-        if (source === 'claude') {
-          const data = await request(QUOTA_URL.claude, { signal });
-          return shown() ? { source, kind: quotaKind(data), data } : null;
-        }
-        let next;
-        try { next = await request(QUOTA_URL.codex, { signal }); }
-        catch { next = undefined; }
-        if (!shown()) return null;
-        if (acceptsSubscription(next)) return { source, kind: 'subscription', data: next };
-        if (next === undefined) {
-          const retained = getSubscription();
-          if (acceptsSubscription(retained)) return { source, kind: 'retained-subscription', data: retained };
-        }
-        onBalanceFallback();
-        const data = await request('/dsh-whale/balance.json' + (manual ? '?refresh=1' : ''), { signal });
-        return shown() ? { source, kind: 'balance', data } : null;
-      }).catch(error => {
-        if (!shown()) return null;
-        throw error;
+    // Every account and the one in use. Reads made while one is running share
+    // it; a manual read first has the runtime query every API account again.
+    function quotas({ manual = false } = {}) {
+      if (quotaJob && !manual) return quotaJob;
+      const job = deadline(signal => request('/api/quotas' + (manual ? '?refresh=1' : ''), { signal })).then(result => {
+        if (!result || result.ok === false || !Array.isArray(result.accounts)) throw new Error(result?.error || '额度暂时无法读取');
+        return result;
+      }).finally(() => { if (quotaJob === job) quotaJob = null; });
+      quotaJob = job;
+      return job;
+    }
+    function select(account, at) {
+      return request('/api/quotas/current', { method: 'PUT', body: at ? { id: account, at } : { id: account } }).then(result => {
+        if (!result || result.ok === false) throw new Error(result?.error || '切换未完成，请重试');
+        return result;
       });
     }
-    // The frequent quota check for the shown source; null when a check is
-    // already running, the read failed, or the source changed meanwhile.
-    function pollQuota() {
-      if (quotaJob) return Promise.resolve(null);
-      const source = current;
-      quotaJob = request(QUOTA_URL[source])
-        .then(data => current === source ? { source, kind: quotaKind(data), data } : null, () => null)
-        .finally(() => { quotaJob = null; });
-      return quotaJob;
+    // An older pet kept its own choice of Codex or Claude in the page. It moves
+    // to the book once, with the time it was made; a later activity still wins.
+    function migrateChoice() {
+      if (load('dshw-display-source-migrated')) return Promise.resolve(null);
+      save('dshw-display-source-migrated', '1');
+      const source = load('dshw-display-source'), at = Number(load('dshw-display-source-manual-at'));
+      if (!['codex', 'claude'].includes(source) || !Number.isFinite(at) || at <= 0) return Promise.resolve(null);
+      return select(source, at).catch(() => null);
     }
     function pollCodexCompletion() {
       // Only the first caller consumes a completion; joining its result would
@@ -118,25 +79,13 @@
       }).finally(() => { claudeJob = null; });
       return claudeJob;
     }
-    // Reads both completion streams. Every completion counts as activity for
-    // its source; each new one is passed once to that source's handler. At
-    // startup the Claude quota snapshot time also counts as Claude activity.
+    // Reads both completion streams and passes each new completion once to
+    // its handler.
     function pollCompletions({ codex = () => {}, claude = () => {} } = {}) {
-      const jobs = [
-        pollCodexCompletion().then(({ record, fresh }) => {
-          if (record) consider('codex', record.notificationAt || record.ts);
-          if (fresh) codex(record);
-        }),
-        pollClaudeCompletion().then(({ record, fresh }) => {
-          if (record) consider('claude', record.completedAt);
-          if (fresh) claude(record);
-        }),
-      ];
-      if (!snapshotChecked) {
-        snapshotChecked = true;
-        jobs.push(request(QUOTA_URL.claude).then(data => { if (acceptsSubscription(data)) consider('claude', data.observedAt); }));
-      }
-      return Promise.allSettled(jobs).then(() => undefined);
+      return Promise.allSettled([
+        pollCodexCompletion().then(({ record, fresh }) => { if (fresh) codex(record); }),
+        pollClaudeCompletion().then(({ record, fresh }) => { if (fresh) claude(record); }),
+      ]).then(() => undefined);
     }
     const records = () => request('/dsh-whale/usage-records.json');
     const settings = () => request('/dsh-whale/usage-settings.json');
@@ -146,7 +95,7 @@
         return result;
       });
     }
-    return Object.freeze({ source: () => current, select, overview, pollQuota, pollCompletions, records, settings, saveSettings });
+    return Object.freeze({ quotas, select, migrateChoice, pollCompletions, records, settings, saveSettings });
   }
   return Object.freeze({ create });
 });
