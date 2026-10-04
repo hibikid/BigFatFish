@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { ChatActivity } from '../runtime/chat/activity.mjs';
 import { ChatService } from '../runtime/chat/service.mjs';
+import { createDispatcher } from '../runtime/dispatcher.mjs';
 import { readEvents } from '../lib/event-stream.js';
 
 const tool = (name, args = {}) => ({ name, arguments: JSON.stringify(args) });
@@ -272,6 +273,29 @@ test('the character may decline to speak: nothing is shown or kept, the daily ca
   now += 15 * 60000; await service.activity.tick();
   assert.equal(service.activity.snapshot().notices[0].text, '早上好呀', 'declining is not an unanswered message');
   assert.equal((await service.billing.summary({ baseUrl: 'https://api.deepseek.com', key: 'synthetic-key' })).recorded, 2);
+});
+
+test('proactive chat speaks only to a user who is present at the computer', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-present-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const local = new Date(); local.setHours(10, 0, 0, 0);
+  let now = local.getTime(), present = false;
+  const dispatcher = createDispatcher({ dataDir, monitor: false, autoRefresh: false, statusInfo: () => ({ visible: true, present }),
+    chatActivityOptions: { now: () => now, random: () => 0 }, chatFetchImpl: async url => url.endsWith('/user/balance') ? Response.json({ balance_infos: [] }) :
+      sse([{ choices: [{ index: 0, delta: { content: '在吗？' } }] }, { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage }]) });
+  t.after(() => dispatcher.close());
+  const call = async (route, method = 'GET', body = null) => JSON.parse((await dispatcher.dispatch(route, { method, body: body && JSON.stringify(body) })).body);
+  await call('/api/chat/settings', 'PUT', { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: 'synthetic-key', persona: '', maxTokens: 256 });
+  await call('/api/chat/activity/settings', 'PUT', { enabled: true, start: '09:00', end: '21:00', minMinutes: 15, maxMinutes: 15, dailyLimit: 3 });
+  const notices = async () => (await call('/api/chat/activity')).notices;
+  const later = async minutes => {
+    now += minutes * 60000; t.mock.timers.tick(1000);
+    for (let i = 0; i < 500 && !(await notices()).length; i++) await new Promise(resolve => setImmediate(resolve));
+  };
+  await later(15); assert.deepEqual(await notices(), [], 'nobody is at the computer');
+  present = true; await later(1);
+  assert.equal((await notices())[0]?.text, '在吗？');
 });
 
 test('scheduled messages alternate between remembered and fresh topics without changing the selected chat, and count in billing', async t => {

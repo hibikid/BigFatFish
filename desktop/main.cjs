@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, globalShortcut, shell, protocol, session, net, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, globalShortcut, shell, protocol, session, net, dialog, safeStorage, powerMonitor } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { UiStateStore } = require('./ui-state-store.cjs');
@@ -157,7 +157,8 @@ else {
     const secretVault = new KeychainVault({ dataDir, safeStorage });
     dispatcher = createDispatcher({ dataDir, secretVault, fetchImpl: (url, options) => net.fetch(url, options), onStop: pauseAndQuit, onShow: show,
       onChatNotice: notice => { if (notice.kind === 'pomodoro') show(); },
-      statusInfo: () => ({ platform: process.platform, visible: !!window?.isVisible(), startup, rendering: gpuStatus }), ...testOptions });
+      // Present: a key or mouse event in the last 15 minutes and the screen not locked.
+      statusInfo: () => ({ platform: process.platform, visible: !!window?.isVisible(), present: !['idle', 'locked'].includes(powerMonitor.getSystemIdleState(15 * 60)), startup, rendering: gpuStatus }), ...testOptions });
     markStartup('dispatcherReady');
     await importLegacyStorage();
     session.defaultSession.protocol.handle('whale', async request => {

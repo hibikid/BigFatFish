@@ -53,7 +53,7 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
       const parsed = () => JSON.parse(bytes.toString('utf8') || '{}');
       if (url.pathname.startsWith('/api/chat/')) {
         if (bytes.length > 128 * 1024) return jsonResult(413, { ok: false, error: '会话请求过大' });
-        chat ||= new ChatService({ dataDir, secretVault, canProactive: () => statusInfo().visible !== false, onNotice: onChatNotice,
+        chat ||= new ChatService({ dataDir, secretVault, canProactive: () => { const status = statusInfo(); return status.visible !== false && status.present !== false; }, onNotice: onChatNotice,
           activityOptions: chatActivityOptions,
           ...(chatFetchImpl ? { fetchImpl: chatFetchImpl } : {}) });
         return chat.dispatch(url, { method, body: bytes, signal });
