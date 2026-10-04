@@ -250,6 +250,30 @@ test('a day of proactive chat starts at the start of the window, so a window pas
   await wait(0); await wait(15); assert.equal(calls, 2);
 });
 
+test('the character may decline to speak: nothing is shown or kept, the daily cap is untouched, and the request is billed', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-decline-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const local = new Date(); local.setHours(22, 0, 0, 0);
+  let now = local.getTime();
+  const requests = [], replies = ['（尾巴轻轻一摆，缩回被窝）[不打扰]', '早上好呀'];
+  const service = new ChatService({ dataDir, activityOptions: { now: () => now, random: () => 0, startTimer: false }, fetchImpl: async (url, options) => {
+    if (url.endsWith('/user/balance')) return Response.json({ balance_infos: [{ currency: 'CNY', total_balance: '10' }] });
+    requests.push(JSON.parse(options.body));
+    return sse([{ choices: [{ index: 0, delta: { content: replies[requests.length - 1] } }] }, { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage }]);
+  } });
+  t.after(() => service.close());
+  service.save({ baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: 'synthetic-key', persona: '你是大肥鱼', maxTokens: 256 });
+  service.activity.saveSettings({ enabled: true, start: '09:00', end: '23:30', minMinutes: 15, maxMinutes: 15, dailyLimit: 1 });
+  now += 15 * 60000; await service.activity.tick();
+  assert.ok(requests[0].messages.at(-1).content.includes('[不打扰]'), 'the prompt must offer the way to decline');
+  assert.deepEqual(service.activity.snapshot().notices, []);
+  assert.equal(service.conversations.allTurns().length, 0, 'a declined message is not kept');
+  assert.equal(service.activity.dailyCount, 0, 'declining does not use up the daily cap');
+  now += 15 * 60000; await service.activity.tick();
+  assert.equal(service.activity.snapshot().notices[0].text, '早上好呀', 'declining is not an unanswered message');
+  assert.equal((await service.billing.summary({ baseUrl: 'https://api.deepseek.com', key: 'synthetic-key' })).recorded, 2);
+});
+
 test('scheduled messages alternate between remembered and fresh topics without changing the selected chat, and count in billing', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-scheduled-chat-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));

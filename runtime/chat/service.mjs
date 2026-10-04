@@ -16,6 +16,13 @@ const KEY_REF = 'whale_chat_api_key_v1';
 const NEXT_KEY_REF = KEY_REF + '_next';
 const json = (status, value) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8' }, body: Buffer.from(JSON.stringify(value)) });
 const BACKGROUND_INSTRUCTION = '按角色人设说一两句自然、简短的话。沿用过往对话的语言；没有上下文时用中文。不要声称看到了用户正在做什么，也不要假装执行了工具。';
+const DECLINE_MARK = '[不打扰]';
+const DECLINE_OFFER = '如果按聊天记录现在不适合打扰我，比如刚道过晚安、我说要出门或在忙，或者你说过自己要去睡了，就只回复 ' + DECLINE_MARK + '，不要写别的。';
+// The marker anywhere, in either bracket style, or a few words starting with it.
+function declined(text) {
+  const bare = text.replace(/[\s\p{P}]/gu, '');
+  return /[[【]不打扰[\]】]/.test(text) || bare.startsWith('不打扰') && bare.length <= 8;
+}
 function savedAt(file) { try { return fs.statSync(file).mtimeMs; } catch { return Infinity; } }
 
 export class ChatService {
@@ -106,10 +113,12 @@ export class ChatService {
     }
   }
   // Half the time continues from the dozen latest exchanges across conversations; otherwise opens a new topic.
-  proactive() {
+  // The character may decline instead; a declined message is never kept or shown.
+  async proactive() {
     const recent = this.activity.random() < 0.5 ? this.conversations.allTurns().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(-12) : null;
-    return this.backgroundReply({ source: 'proactive', history: recent || [], prompt: recent ? '结合我们最近聊过的一件事，主动和我随便聊一句。不要推测我现在正在做什么。' :
-      '按你的人设，主动发起一个轻松的新话题。不要推测我现在正在做什么。' });
+    const generated = await this.backgroundReply({ source: 'proactive', history: recent || [], prompt: (recent ? '结合我们最近聊过的一件事，主动和我随便聊一句。不要推测我现在正在做什么。' :
+      '按你的人设，主动发起一个轻松的新话题。不要推测我现在正在做什么。') + DECLINE_OFFER });
+    return generated && declined(generated.text) ? null : generated;
   }
   async reminder(state) {
     const prompt = `番茄钟状态：${state.phase}；第 ${state.cycle}/${state.cycles} 轮；专注 ${state.focusMinutes} 分钟，休息 ${state.breakMinutes} 分钟。请按人设简短提醒我${state.phase === 'await_break' ? '专注结束，可以准备休息了' : state.phase === 'await_focus' ? '休息结束，可以准备下一轮专注了' : '本次专注已经完成'}。阶段尚未开始，不要宣称已经开始，不要要求我发送消息确认，也不要解释界面操作。`;
