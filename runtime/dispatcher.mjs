@@ -38,8 +38,9 @@ export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(o
     activityOptions: chatActivityOptions, queryBalance: () => book.petBalance(), onUserMessage: () => book.petMessage(),
     ...(chatFetchImpl ? { fetchImpl: chatFetchImpl } : {}) });
   // Looking at quota never starts the chat service, and so never proactive chat.
-  const book = new QuotaBook({ whale, billing: () => chat?.billing });
+  const book = new QuotaBook({ whale, billing: ({ start = false } = {}) => start && !closing ? chatService().billing : chat?.billing });
   whale.onTurnEnd = turn => book.codexTurn(turn);
+  whale.petUsedDuring = (context, from, to) => !!chat?.billing.usedBetween({ baseUrl: context.baseUrl, key: context.key }, from, to);
   const watcher = monitor ? new SessionMonitor(whale) : null;
   watcher?.start();
   const timer = autoRefresh ? setInterval(() => book.refresh().catch(() => {}), 60000) : null;
@@ -75,6 +76,7 @@ export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(o
         else await book.fill();
         return jsonResult(200, book.snapshot());
       }
+      if (url.pathname === '/api/quota-records' && method === 'GET') return jsonResult(200, book.records());
       if (url.pathname === '/api/quotas/current' && method === 'PUT') {
         const input = parsed();
         try { return jsonResult(200, book.select(input?.id, input?.at)); }

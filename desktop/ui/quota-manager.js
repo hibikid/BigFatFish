@@ -1,5 +1,6 @@
 // 额度管理: every account the pet knows, where its key is kept and how its
-// quota is read. Each change saves at once; the pet picks it up without a reload.
+// quota is read (账户); what each spent and on what (记录); and when the pet
+// says so (提醒). Each change saves at once; the pet picks it up without a reload.
 const METHODS = [['auto', '自动识别'], ['billing', '兼容账单接口（常见中转站）'], ['newapi', 'New API / One API 密钥额度'], ['deepseek', 'DeepSeek 账户余额'],
   ['source-usage', '查询链接（日用量与额度）'], ['custom-json', '自定义 JSON 余额接口']];
 const KEY_SOURCES = { keychain: '密钥已存入钥匙串', environment: '密钥来自环境变量', 'codex-config': '使用 Codex 配置里的密钥', session: '密钥只保留到挂件退出' };
@@ -8,8 +9,8 @@ const PRICE_FIELDS = [['input', '输入'], ['cachedInput', '缓存命中'], ['ou
 
 export function createQuotaManager({ dialog, request, money, presentation, toast, onChanged }) {
   const body = dialog.querySelector('[data-quota-body]'), error = dialog.querySelector('[data-quota-error]');
-  const currency = dialog.querySelector('[data-quota-currency]');
-  let accounts = null, quotas = null, editing = '', adding = false, busy = false;
+  const currency = dialog.querySelector('[data-quota-currency]'), tabs = dialog.querySelector('[data-quota-tabs]');
+  let accounts = null, quotas = null, records = null, alertSettings = null, editing = '', adding = false, busy = false, tab = 'accounts';
 
   const element = (tag, className, text) => {
     const node = document.createElement(tag);
@@ -53,6 +54,8 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
   }
   async function load() {
     [accounts, quotas] = await Promise.all([request('/api/quota-accounts'), request('/api/quotas')]);
+    if (tab === 'records') records = await request('/api/quota-records');
+    if (tab === 'alerts') alertSettings = (await request('/dsh-whale/usage-settings.json')).settings;
     render();
   }
   async function changed() {
@@ -60,9 +63,9 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
     onChanged();
   }
 
-  function quotaLines(view) {
+  function quotaLines(view, { today = true } = {}) {
     if (!view) return [];
-    const options = { formatMoney: format, now: Date.now() };
+    const options = { formatMoney: format, now: Date.now(), today };
     const lines = presentation.rows(view, options).map(row => row.label + ' ' + (/%$/.test(row.value) ? '剩余 ' : '') + row.value + (row.note ? ' · ' + row.note : ''));
     const pace = presentation.paceText(view, options), status = presentation.status(view);
     return [...lines, ...(pace ? [pace] : []), ...(status ? [status] : [])];
@@ -233,25 +236,176 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
     }
     return section;
   }
+  const pad = value => String(value).padStart(2, '0');
+  const dayOf = date => new Date(date + 'T00:00:00');
+  const stamp = at => { const time = new Date(at); return (time.getMonth() + 1) + '/' + time.getDate() + ' ' + pad(time.getHours()) + ':' + pad(time.getMinutes()); };
+  const todayKey = () => { const now = new Date(); return now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()); };
+  const weekday = date => date === todayKey() ? '今天' : '周' + '日一二三四五六'.charAt(dayOf(date).getDay());
+  const STATES = { estimated: '（估算）', observed: '（期间扣费）' };
+  const OUTCOMES = { failed: '失败', aborted: '已取消', interrupted: '中断', superseded: '被打断', cancelled: '已取消' };
+
+  // The last seven days as bars, today last; on an account Codex and the pet
+  // share, the pet's part is drawn inside each bar.
+  function chart(days, unit, split) {
+    const max = Math.max(0, ...days.map(day => day.total || 0)), box = element('div', 'quota-chart');
+    box.setAttribute('role', 'img');
+    box.setAttribute('aria-label', '近 7 天每日消费：' + days.map(day => day.date.slice(5) + ' ' + (day.total === null ? '没有记录' : format(day.total, unit))).join('，'));
+    for (const day of days) {
+      const column = element('div', 'quota-chart-day'), track = element('div', 'quota-chart-track');
+      column.title = day.date.slice(5).replace('-', '/') + ' ' + (day.total === null ? '没有记录' : format(day.total, unit) + (day.estimated ? '（估算）' : '')) +
+        (split && Number.isFinite(day.pet) ? '，其中大肥鱼 ' + format(day.pet, unit) : '');
+      if (day.total !== null && max > 0) {
+        const bar = element('div', 'quota-chart-bar' + (day.estimated ? ' estimated' : ''));
+        bar.style.height = Math.max(2, day.total / max * 100) + '%';
+        if (split && Number.isFinite(day.pet) && day.total > 0) {
+          const pet = element('div', 'quota-chart-pet');
+          pet.style.height = Math.min(100, day.pet / day.total * 100) + '%';
+          bar.append(pet);
+        }
+        track.append(bar);
+      } else track.classList.add(day.total === null ? 'unknown' : 'empty');
+      column.append(track, element('span', 'quota-chart-label', weekday(day.date)));
+      box.append(column);
+    }
+    return box;
+  }
+  function eventRow(time, source, model, amount, tokens) {
+    const row = element('div', 'quota-event');
+    row.append(element('span', 'quota-event-time', time), element('span', 'quota-event-source', source), element('span', 'quota-event-model', model),
+      element('span', 'quota-event-amount', amount), element('span', 'quota-event-tokens', Number.isFinite(tokens) ? tokens.toLocaleString('en-US') + ' tokens' : ''));
+    return row;
+  }
+  function eventDetails(events) {
+    const details = element('details', 'quota-events');
+    details.append(element('summary', '', '明细（最近 ' + events.length + ' 条）'));
+    for (const event of events) {
+      const amount = Number.isFinite(event.amount) ? format(event.amount, event.currency) + (STATES[event.state] || '') : event.state === 'pending' ? '待记账' : '金额未知';
+      details.append(eventRow(stamp(event.at), event.kind === 'pet' ? '大肥鱼' : 'Codex', event.model + (OUTCOMES[event.outcome] ? ' · ' + OUTCOMES[event.outcome] : ''), amount, event.tokens));
+    }
+    return details;
+  }
+  function turnDetails(turns) {
+    const details = element('details', 'quota-events');
+    details.append(element('summary', '', '最近几轮（' + turns.length + '）'));
+    for (const turn of turns) {
+      const left = [['5h', turn.fiveHour], ['7d', turn.sevenDay]].filter(([, value]) => Number.isFinite(value)).map(([label, value]) => label + ' 剩 ' + Math.round(value) + '%').join(' · ');
+      details.append(eventRow(stamp(turn.at), 'Codex', turn.model + (OUTCOMES[turn.outcome] ? ' · ' + OUTCOMES[turn.outcome] : ''), left || '--', turn.tokens));
+    }
+    return details;
+  }
+  function spendBlocks(record) {
+    const unit = record.currency, amount = value => Number.isFinite(value) ? format(value, unit) : '--';
+    const blocks = [chart(record.days.slice(0, 7).reverse(), unit, record.split),
+      line('今日 ' + amount(record.today) + ' · 近 7 天 ' + amount(record.days7) + ' · 近 30 天 ' + amount(record.days30))];
+    if (record.split) {
+      const week = key => record.days.slice(0, 7).reduce((total, day) => total + (Number.isFinite(day[key]) ? day[key] : 0), 0);
+      blocks.push(line('近 7 天：Codex 任务 ' + format(week('codex'), unit) + ' · 大肥鱼 ' + format(week('pet'), unit)));
+    }
+    if (record.days.some(day => day.estimated)) blocks.push(line('没有账单记录的日子按大肥鱼的请求估算'));
+    if (record.events.length) blocks.push(eventDetails(record.events));
+    return blocks;
+  }
+  function renderRecords() {
+    const section = element('section', 'quota-section'), byId = new Map((records?.accounts || []).map(item => [item.id, item]));
+    const views = presentation.overview(quotas);
+    if (!views.length) section.append(line('还没有可以显示的额度。'));
+    for (const view of views) {
+      const record = byId.get(view.id) || {}, card = element('article', 'quota-card'), head = element('div', 'quota-card-head');
+      card.dataset.accountId = view.id;
+      head.append(element('strong', '', presentation.title(view)));
+      if (view.id === quotas.current) head.append(element('span', 'quota-tag', '当前'));
+      card.append(head, ...quotaLines(view.available || view.error ? view : null, { today: !record.days }).map(text => line(text)));
+      if (record.days) card.append(...spendBlocks(record));
+      if (record.turns?.length) card.append(turnDetails(record.turns));
+      section.append(card);
+    }
+    return section;
+  }
+
+  // How completions show is kept by the widget; ask it, then tell it.
+  function noticeState() {
+    let state = { turnCostOn: true, turnCostCloseMs: 5000, failed: true, cancelled: true };
+    const listen = event => { state = { ...state, ...event.detail }; };
+    window.addEventListener('whale-notice-settings-state', listen);
+    window.dispatchEvent(new Event('whale-notice-settings-request'));
+    window.removeEventListener('whale-notice-settings-state', listen);
+    return state;
+  }
+  function renderAlerts() {
+    const settings = alertSettings.quotaAlerts, notice = noticeState(), form = element('form', 'quota-alerts');
+    const units = [...new Set(['USD', 'CNY', ...accounts.accounts.map(account => account.currency)])];
+    const symbol = unit => unit === 'CNY' ? '¥' : unit === 'USD' ? '$' : unit;
+    const check = (name, checked, label) => {
+      const wrap = element('label', 'check');
+      wrap.append(Object.assign(element('input'), { type: 'checkbox', name, checked }), document.createTextNode(label));
+      return wrap;
+    };
+    const number = (name, value, extra = {}) => Object.assign(input(name, value ?? '', { type: 'number' }), { min: 0, step: 'any', ...extra });
+    const amounts = (prefix, values) => {
+      const row = element('div', 'quota-amounts');
+      for (const unit of units) {
+        const wrap = element('label', 'quota-amount', symbol(unit));
+        wrap.append(number(prefix + ':' + unit, values[unit] ?? '', { placeholder: '不提醒' }));
+        row.append(wrap);
+      }
+      return row;
+    };
+    const low = element('fieldset', 'quota-fieldset'), budget = element('fieldset', 'quota-fieldset'), done = element('fieldset', 'quota-fieldset');
+    const percents = element('div', 'field-grid');
+    percents.append(field('订阅和带上限的额度：剩余低于（%）', number('windowPercent', settings.windowPercent, { max: 100 })),
+      field('余额：低于满格的（%）', number('balancePercent', settings.balancePercent, { max: 100 }), '满格是上次充值以来的最高余额'));
+    low.append(element('legend', '', '额度不足提醒'), check('on', settings.on, '额度或余额快用完时提醒'), percents,
+      element('p', 'quota-subhead', '余额低于这个金额时也提醒'), amounts('below', settings.balanceBelow));
+    budget.append(element('legend', '', '今日消费提醒'), check('budgetOn', settings.budgetOn, '今天的消费超过下面的金额时提醒（同一币种的账户合计）'), amounts('budget', settings.dailyBudget));
+    done.append(element('legend', '', '完成提示'), check('turnCostOn', notice.turnCostOn, 'Codex 每轮结束时显示这一轮的花费'),
+      field('气泡停留（秒，0 表示点一下才关）', number('turnCostSeconds', Math.round(notice.turnCostCloseMs / 1000), { step: 1 })),
+      check('failed', notice.failed, '任务失败时也提示'), check('cancelled', notice.cancelled, '任务暂停或取消时也提示'));
+    const actions = element('div', 'quota-actions');
+    actions.append(button('保存', 'primary', async () => {
+      const value = name => form.elements.namedItem(name);
+      const read = prefix => Object.fromEntries(units.map(unit => [unit, value(prefix + ':' + unit).value.trim()]).filter(([, amount]) => amount !== ''));
+      const outcomeNotice = { failed: value('failed').checked, cancelled: value('cancelled').checked };
+      const saved = await request('/dsh-whale/usage-settings.json', 'PUT', { outcomeNotice, quotaAlerts: { on: value('on').checked, windowPercent: value('windowPercent').value,
+        balancePercent: value('balancePercent').value, balanceBelow: read('below'), budgetOn: value('budgetOn').checked, dailyBudget: read('budget') } });
+      alertSettings = saved.settings;
+      window.dispatchEvent(new CustomEvent('whale-notice-settings', { detail: { ...outcomeNotice, turnCostOn: value('turnCostOn').checked,
+        turnCostCloseMs: Math.max(0, Math.round(Number(value('turnCostSeconds').value) || 0)) * 1000 } }));
+      toast('提醒设置已保存'); onChanged();
+    }));
+    form.append(low, budget, done, actions);
+    form.addEventListener('submit', event => event.preventDefault());
+    return form;
+  }
   function render() {
     if (!accounts) return;
+    for (const node of tabs.querySelectorAll('[data-tab]')) node.setAttribute('aria-selected', String(node.dataset.tab === tab));
     const scroll = body.scrollTop;
-    body.replaceChildren(renderSubscriptions(), renderAccounts());
+    body.replaceChildren(...(tab === 'records' && records ? [renderRecords()] : tab === 'alerts' && alertSettings ? [renderAlerts()] : tab === 'accounts' ? [renderSubscriptions(), renderAccounts()] : []));
     if (accounts.error) showError(accounts.error);
     body.scrollTop = scroll;
   }
+  for (const node of tabs.querySelectorAll('[data-tab]')) node.addEventListener('click', () => {
+    if (tab === node.dataset.tab) return;
+    tab = node.dataset.tab; editing = ''; adding = false; showError('');
+    body.scrollTop = 0;
+    render();
+    void run(load);
+  });
 
   currency.addEventListener('change', () => run(async () => {
     await money.setDisplayCurrency(currency.value);
     render(); onChanged();
   }, currency));
-  money.onChange(state => { currency.value = state.displayCurrency; if (dialog.open) render(); });
+  // A new display currency redraws the amounts, but never a form being filled in.
+  money.onChange(state => { currency.value = state.displayCurrency; if (dialog.open && tab !== 'alerts') render(); });
   dialog.querySelector('[data-quota-close]').addEventListener('click', () => dialog.close());
   return Object.freeze({
-    async open() {
+    async open({ tab: page = 'accounts' } = {}) {
       editing = ''; adding = false; showError('');
+      tab = ['accounts', 'records', 'alerts'].includes(page) ? page : 'accounts';
+      render();
       if (!dialog.open) dialog.showModal();
-      try { await load(); } catch (failure) { showError(failure?.message || '额度账户暂时无法读取'); }
+      try { await load(); } catch (failure) { showError(failure?.message || '额度暂时无法读取'); }
     },
   });
 }

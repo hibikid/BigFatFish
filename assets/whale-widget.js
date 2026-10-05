@@ -14,7 +14,6 @@
 
 
     var BUBBLE_MS = 5000;
-    var whaleMoneyTemplates = new WeakMap();
     var usageClient = WhaleUsageClient.create({
       fetchImpl: window.fetch.bind(window),
       shouldNotify: WhaleTurnNotice.shouldNotify,
@@ -337,12 +336,16 @@
     var usageRecBtn = document.createElement('button');
     usageRecBtn.type = 'button';
     usageRecBtn.className = 'dshwv-roleimport';
-    usageRecBtn.textContent = '- = 小鲸鱼记账 = -';
-    usageRecBtn.title = '查看今日/近7天/全部消费记录';
+    usageRecBtn.textContent = '- = 额度记录 = -';
+    usageRecBtn.title = '在额度管理里查看各账户的消费记录';
     usageRecBtn.addEventListener('click', function (e) {
       e.stopPropagation();
-      toggleUsagePanel();
+      openQuotaRecords();
     });
+    function openQuotaRecords() {
+      closeMenu();
+      window.dispatchEvent(new CustomEvent('whale-open-settings', { detail: { tab: 'records' } }));
+    }
     var taskEndToggle = document.createElement('input');
     taskEndToggle.type = 'checkbox';
     taskEndToggle.className = 'dshwv-check';
@@ -746,7 +749,6 @@
     menuBox.appendChild(row2);
     menuBox.appendChild(row3);
     menuBox.appendChild(row6);
-    menuBox.appendChild(row7);
     var outcomeRow = menuRow();
     var failedNoticeToggle = document.createElement('input');
     failedNoticeToggle.type = 'checkbox'; failedNoticeToggle.className = 'dshwv-check';
@@ -762,7 +764,20 @@
     }
     failedNoticeToggle.addEventListener('change', saveOutcomeNotice);
     cancelledNoticeToggle.addEventListener('change', saveOutcomeNotice);
-    menuBox.appendChild(outcomeRow);
+    // 额度管理's reminders page sets how completions are shown; these controls
+    // keep the state the bubbles read.
+    window.addEventListener('whale-notice-settings-request', function () {
+      window.dispatchEvent(new CustomEvent('whale-notice-settings-state', { detail: { turnCostOn: turnCostOn, turnCostCloseMs: turnCostCloseMs,
+        failed: failedNoticeToggle.checked, cancelled: cancelledNoticeToggle.checked } }));
+    });
+    window.addEventListener('whale-notice-settings', function (event) {
+      var detail = event.detail || {};
+      if (typeof detail.turnCostOn === 'boolean') setTurnCostOn(detail.turnCostOn);
+      if (typeof detail.turnCostCloseMs === 'number') setTurnCostClose(detail.turnCostCloseMs / 1000);
+      if (typeof detail.failed === 'boolean') failedNoticeToggle.checked = detail.failed;
+      if (typeof detail.cancelled === 'boolean') cancelledNoticeToggle.checked = detail.cancelled;
+      if (usageSet) usageSet.outcomeNotice = { failed: failedNoticeToggle.checked, cancelled: cancelledNoticeToggle.checked };
+    });
     var rowTaskEnd = menuRow();
     rowTaskEnd.appendChild(menuLabel('任务结束音效'));
     rowTaskEnd.appendChild(taskEndToggle);
@@ -1063,10 +1078,7 @@
       return button;
     }
     appendCommandButton('刷新额度', function () { refresh(true); });
-    appendCommandButton('查看用量记录', function () {
-      if (!menuOpen) toggleMenu();
-      showUsageSub();
-    });
+    appendCommandButton('查看额度记录', openQuotaRecords);
     appendCommandButton('查看运行状态', function () {
       if (window.whaleDesktop && window.whaleDesktop.command) window.whaleDesktop.command('status').catch(function () {});
     });
@@ -1088,787 +1100,11 @@
     menuRootView.className = 'dshwv-menuview';
     while (menuBox.firstChild) menuRootView.appendChild(menuBox.firstChild);
     menuBox.appendChild(menuRootView);
-    var usagePanel = document.createElement('div');
-    usagePanel.className = 'dshwv-usage-sub';
-    usagePanel.style.display = 'none';
-    var usageArea = document.createElement('div');
-    usageArea.className = 'dshwv-usage-area';
-    usageArea.style.cssText = 'flex:1 1 auto;min-height:0;overflow:hidden;position:relative';
-    menuBox.appendChild(usageArea);
-    usageArea.appendChild(usagePanel);
     var usageNavRow = menuRow();
     usageNavRow.style.flex = '0 0 auto';
     usageRecBtn.style.width = '100%';
     usageNavRow.appendChild(usageRecBtn);
     menuBox.appendChild(usageNavRow);
-    var usagePanelOpen = false;
-    var usageRefreshTimer = null;
-    var usageMainEl = null;
-    function toggleUsagePanel() {
-      if (usagePanelOpen) {
-        hideUsageSub();
-        return;
-      }
-      showUsageSub();
-    }
-    function dshwvPlayViewIn(el) {
-      if (!el) return;
-      el.classList.remove('dshwv-view-in');
-      void el.offsetWidth;
-      el.classList.add('dshwv-view-in');
-    }
-    var usageHideTimer = null;
-    var usageShowTimer = null;
-    function setUsageNavBtn(inUsage) {
-      try {
-        usageRecBtn.textContent = inUsage ? '‹ 返回' : '- = 小鲸鱼记账 = -';
-        usageRecBtn.title = inUsage ? '返回主菜单' : '查看今日/近7天/全部消费记录';
-      } catch (err) {}
-    }
-    function showUsageSub() {
-      try {
-        if (usageHideTimer) {
-          clearTimeout(usageHideTimer);
-          usageHideTimer = null;
-        }
-      } catch (err) {}
-      usagePanelOpen = true;
-      var w0 = 300;
-      var h0 = 360;
-      try {
-        var mb = menuBox.getBoundingClientRect();
-        if (mb.width > 0) w0 = Math.round(mb.width);
-        if (mb.height > 0) h0 = Math.round(mb.height);
-      } catch (err) {}
-      menuBox.style.width = w0 + 'px';
-      menuBox.style.maxWidth = w0 + 'px';
-      menuBox.style.height = h0 + 'px';
-      menuBox.style.overflow = 'hidden';
-      menuBox.style.display = 'flex';
-      menuBox.style.flexDirection = 'column';
-      try {
-        if (menuRootView && usageArea) {
-          if (menuRootView.parentNode !== usageArea) usageArea.appendChild(menuRootView);
-        }
-      } catch (err) {}
-      usageArea.style.display = 'block';
-      usagePanel.style.display = 'block';
-      usagePanel.style.position = 'absolute';
-      usagePanel.style.top = '0';
-      usagePanel.style.left = '0';
-      usagePanel.style.width = '100%';
-      usagePanel.style.height = '100%';
-      usagePanel.style.maxHeight = 'none';
-      usagePanel.style.overflowY = 'auto';
-      usagePanel.style.zIndex = '1';
-      usagePanel.style.transform = 'translateY(100%)';
-      usagePanel.style.transition = 'none';
-      if (menuRootView) {
-        menuRootView.style.display = 'block';
-        menuRootView.style.position = 'absolute';
-        menuRootView.style.top = '0';
-        menuRootView.style.left = '0';
-        menuRootView.style.width = '100%';
-        menuRootView.style.height = '100%';
-        menuRootView.style.zIndex = '2';
-        menuRootView.style.transform = 'translateY(0)';
-        menuRootView.style.transition = 'none';
-      }
-      setUsageNavBtn(true);
-      renderUsagePanel();
-      try {
-        void usageArea.offsetHeight;
-      } catch (err) {}
-      usagePanel.style.transition = 'transform .22s ease';
-      usagePanel.style.transform = 'translateY(0)';
-      if (menuRootView) {
-        menuRootView.style.transition = 'transform .22s ease';
-        menuRootView.style.transform = 'translateY(-100%)';
-      }
-      usageShowTimer = setTimeout(function () {
-        try {
-          if (menuRootView) menuRootView.style.display = 'none';
-        } catch (err) {}
-      }, 240);
-      if (usageRefreshTimer) {
-        clearInterval(usageRefreshTimer);
-        usageRefreshTimer = null;
-      }
-      usageRefreshTimer = setInterval(function () {
-        if (usagePanelOpen) renderUsagePanel();
-      }, 10000);
-    }
-    function hideUsageSub() {
-      if (usageRefreshTimer) {
-        clearInterval(usageRefreshTimer);
-        usageRefreshTimer = null;
-      }
-      if (usageHideTimer) {
-        clearTimeout(usageHideTimer);
-        usageHideTimer = null;
-      }
-      if (usageShowTimer) {
-        clearTimeout(usageShowTimer);
-        usageShowTimer = null;
-      }
-      if (!usagePanelOpen) {
-        setUsageNavBtn(false);
-        return;
-      }
-      usagePanelOpen = false;
-      if (!usagePanel) {
-        setUsageNavBtn(false);
-        return;
-      }
-      setUsageNavBtn(false);
-      try {
-        if (menuRootView && usageArea) {
-          if (menuRootView.parentNode !== usageArea) usageArea.appendChild(menuRootView);
-        }
-      } catch (err) {}
-      usagePanel.style.position = 'absolute';
-      usagePanel.style.top = '0';
-      usagePanel.style.left = '0';
-      usagePanel.style.width = '100%';
-      usagePanel.style.height = '100%';
-      usagePanel.style.zIndex = '2';
-      usagePanel.style.transform = 'translateY(0)';
-      usagePanel.style.transition = 'none';
-      if (menuRootView) {
-        menuRootView.style.display = 'block';
-        menuRootView.style.position = 'absolute';
-        menuRootView.style.top = '0';
-        menuRootView.style.left = '0';
-        menuRootView.style.width = '100%';
-        menuRootView.style.height = '100%';
-        menuRootView.style.zIndex = '1';
-        menuRootView.style.transform = 'translateY(-100%)';
-        menuRootView.style.transition = 'none';
-      }
-      try {
-        void usageArea.offsetHeight;
-      } catch (err) {}
-      usagePanel.style.transition = 'transform .22s ease';
-      usagePanel.style.transform = 'translateY(100%)';
-      if (menuRootView) {
-        menuRootView.style.transition = 'transform .22s ease';
-        menuRootView.style.transform = 'translateY(0)';
-      }
-      usageHideTimer = setTimeout(function () {
-        usageHideTimer = null;
-        try {
-          usagePanel.style.display = 'none';
-        } catch (err) {}
-        try {
-          usagePanel.style.transform = '';
-          usagePanel.style.transition = '';
-          usagePanel.style.width = '';
-          usagePanel.style.height = '';
-          usagePanel.style.maxHeight = '';
-          usagePanel.style.position = '';
-          usagePanel.style.top = '';
-          usagePanel.style.left = '';
-          usagePanel.style.zIndex = '';
-        } catch (err) {}
-        if (menuRootView && usageArea) {
-          try {
-            if (usageArea.contains(menuRootView)) menuBox.insertBefore(menuRootView, usageArea);
-            menuRootView.style.transform = '';
-            menuRootView.style.transition = '';
-            menuRootView.style.position = '';
-            menuRootView.style.top = '';
-            menuRootView.style.left = '';
-            menuRootView.style.width = '';
-            menuRootView.style.height = '';
-            menuRootView.style.zIndex = '';
-          } catch (err) {}
-        }
-        try {
-          usageArea.style.display = '';
-        } catch (err) {}
-        if (menuBox) {
-          menuBox.style.width = '';
-          menuBox.style.maxWidth = '';
-          menuBox.style.height = '';
-          menuBox.style.overflow = '';
-          menuBox.style.display = '';
-          menuBox.style.flexDirection = '';
-        }
-      }, 230);
-    }
-    function closeUsagePanel() {
-      hideUsageSub();
-    }
-    function whaleCurrencySymbol() {
-      return WhaleMoney.symbol();
-    }
-    function usageMoney(x, currency) {
-      return x == null ? '—' : WhaleMoney.formatMoney(x, currency || state && state.currency || 'USD');
-    }
-    function usageMoneyText(x, currency) {
-      var nativeCurrency = currency || state && state.currency || 'USD';
-      return function () { return usageMoney(x, nativeCurrency); };
-    }
-    function bindUsageMoney(element, x, currency) {
-      return WhaleMoney.bind(element, usageMoneyText(x, currency));
-    }
-    function usageTokens(value) {
-      var n = Number(value);
-      if (!isFinite(n) || n < 0) return '—';
-      if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 1 : 2).replace(/\.0+$/, '') + 'M tokens';
-      if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 1 : 2).replace(/\.0+$/, '') + 'K tokens';
-      return Math.floor(n).toLocaleString('en-US') + ' tokens';
-    }
-    function usageRawAmounts(rows) {
-      if (!Array.isArray(rows) || !rows.length) return '金额待获取';
-      return rows.map(function (row) {
-        var n = Number(row && row.total);
-        return /^[A-Z]{3}$/.test(row && row.currency || '') && isFinite(n) ? row.currency + ' ' + n.toLocaleString('en-US', { maximumFractionDigits: 6 }) : '';
-      }).filter(Boolean).join(' · ') || '金额待获取';
-    }
-    function usageDayLabel(day) {
-      try {
-        var d = day.split('-');
-        if (d.length !== 3) return day;
-        var now = new Date();
-        var cur = String(now.getFullYear()) + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
-        if (day === cur) return '今天';
-        return d[1] + '-' + d[2];
-      } catch (err) {
-        return day;
-      }
-    }
-    function renderUsagePanel() {
-      if (usageMainEl && usagePanelOpen && usageSet !== null) {
-        refreshUsageMain();
-        return;
-      }
-      buildUsageSubShell();
-      refreshUsageMain();
-    }
-    function buildUsageSubShell() {
-      usagePanel.innerHTML = '';
-      var subTitle = document.createElement('div');
-      subTitle.className = 'dshwv-usage-subtitle';
-      subTitle.textContent = '- = 小鲸鱼记账 = -';
-      usagePanel.appendChild(subTitle);
-      buildUsageSettingsArea();
-      usageMainEl = document.createElement('div');
-      usageMainEl.className = 'dshwv-usagebody';
-      usagePanel.appendChild(usageMainEl);
-    }
-    function usageAlertBudgetEditor(key, onSave) {
-      try {
-        var isAlert = key === 'alert';
-        var cfg = (usageSet || ({}))[isAlert ? 'alert' : 'budget'] || ({});
-        var numDef = isAlert ? 50 : 20;
-        var numInit = isAlert ? cfg.below != null ? cfg.below : numDef : cfg.amount != null ? cfg.amount : numDef;
-        var nativeCurrency = state.currency || 'USD';
-        var nativeDraft = Number(numInit);
-        var step = {
-          kind: 'custom',
-          modules: JSON.parse(JSON.stringify(usageRemindLinesOf(cfg, isAlert)))
-        };
-        var bkEditItems = bubbleEditItems;
-        var bkEditorSnap = bubbleEditorSnap;
-        var bkItemSnap = bubbleItemSnap;
-        var bkEditIdx = bubbleEditItemIdx;
-        var bkSide = bubbleEditSide;
-        var bkPal = bubblePalEl;
-        var bkPv = bubblePvEl;
-        var bkPrev = bubblePvPrevEl;
-        var bkRenderPv = renderBubblePv;
-        var bkQeditEnsure = qeditEnsure;
-        var bkModMaskZ = moduleMask ? moduleMask.style.zIndex : '';
-        bubbleEditItems = [step];
-        bubbleEditItemIdx = 0;
-        bubbleEditSide = -1;
-        bubbleItemSnap = JSON.parse(JSON.stringify(step));
-        bubbleEditorSnap = null;
-        var mask = document.createElement('div');
-        mask.className = 'dshwv-bubmask';
-        mask.style.zIndex = '26000';
-        var card = document.createElement('div');
-        card.className = 'dshwv-bubcard';
-        card.style.maxHeight = '88vh';
-        card.style.overflow = 'hidden auto';
-        var title = document.createElement('div');
-        title.className = 'dshwv-bubtitle';
-        title.textContent = '编辑 ' + (isAlert ? '余额预警' : '今日预算') + '提醒内容(可拖动下方模块入框)';
-        card.appendChild(title);
-        var secCond = document.createElement('div');
-        secCond.className = 'dshwv-bubsec dshwv-bubsec-first';
-        secCond.textContent = isAlert ? '触发条件(余额低于该值时提醒)' : '触发条件(今日已观测达到该值时提醒)';
-        card.appendChild(secCond);
-        var chk = document.createElement('input');
-        chk.type = 'checkbox';
-        chk.className = 'dshwv-check';
-        chk.checked = !!cfg.on;
-        var numInp = document.createElement('input');
-        numInp.type = 'number';
-        numInp.min = '0';
-        numInp.step = '0.01';
-        numInp.className = 'dshwv-number';
-        numInp.style.width = '80px';
-        numInp.dataset.moneyInput = key;
-        WhaleMoney.bind(numInp, function () { return WhaleMoney.formatNumber(nativeDraft, nativeCurrency); }, function (value) { numInp.value = value; });
-        var condBox = document.createElement('div');
-        condBox.style.padding = '2px 0';
-        condBox.style.display = 'flex';
-        condBox.style.flexWrap = 'wrap';
-        condBox.style.alignItems = 'center';
-        condBox.style.gap = '6px 14px';
-        condBox.style.textAlign = 'left';
-        condBox.style.fontSize = '12px';
-        condBox.style.color = '#203170';
-        function segCond() {
-          var s = document.createElement('span');
-          s.style.display = 'inline-flex';
-          s.style.alignItems = 'center';
-          s.style.gap = '5px';
-          s.style.whiteSpace = 'nowrap';
-          return s;
-        }
-        var gOn = segCond();
-        gOn.appendChild(chk);
-        gOn.appendChild(qLabel('启用提醒'));
-        condBox.appendChild(gOn);
-        var gNum = segCond();
-        gNum.appendChild(qLabel(isAlert ? '余额 ≤ ' : '今日已观测 ≥ '));
-        gNum.appendChild(numInp);
-        var currencyUnit = qLabel('');
-        WhaleMoney.bind(currencyUnit, function () { return ' ' + WhaleMoney.unit() + '时提醒'; });
-        gNum.appendChild(currencyUnit);
-        condBox.appendChild(gNum);
-        var condBrk = document.createElement('span');
-        condBrk.style.flex = '1 0 100%';
-        condBrk.style.height = '0';
-        condBrk.style.margin = '0';
-        condBox.appendChild(condBrk);
-        var acChk = document.createElement('input');
-        acChk.type = 'checkbox';
-        acChk.className = 'dshwv-check';
-        acChk.checked = cfg.autoClose !== false;
-        var defSec = Number(cfg.ttlSec);
-        if (!isFinite(defSec) || defSec <= 0) defSec = 6;
-        var secInp = document.createElement('input');
-        secInp.type = 'number';
-        secInp.min = '0';
-        secInp.step = '1';
-        secInp.className = 'dshwv-number';
-        secInp.style.width = '56px';
-        secInp.value = String(defSec);
-        var gAc = segCond();
-        gAc.appendChild(acChk);
-        gAc.appendChild(qLabel('自动关闭'));
-        condBox.appendChild(gAc);
-        var gSec = segCond();
-        gSec.appendChild(secInp);
-        var lSec = qLabel('秒(0=不自动关闭)');
-        lSec.style.opacity = '.75';
-        lSec.style.fontSize = '11px';
-        gSec.appendChild(lSec);
-        condBox.appendChild(gSec);
-        card.appendChild(condBox);
-        var secPal = document.createElement('div');
-        secPal.className = 'dshwv-bubsec dshwv-bubsec-first';
-        secPal.textContent = '可选模块(点击或拖入下方内容框)';
-        card.appendChild(secPal);
-        bubblePalEl = document.createElement('div');
-        bubblePalEl.className = 'dshwv-bubpal';
-        card.appendChild(bubblePalEl);
-        var secPv = document.createElement('div');
-        secPv.className = 'dshwv-bubsec';
-        secPv.textContent = '提醒内容(同一行模块并排 ≤6;拖模块到行边缘=并排、上/下=拆行、拖 ⠿ 整行排序;{below} / {amount} 触发时替换)';
-        card.appendChild(secPv);
-        bubblePvEl = document.createElement('div');
-        bubblePvEl.className = 'dshwv-bubpvbox';
-        card.appendChild(bubblePvEl);
-        bubblePvPrevEl = document.createElement('div');
-        bubblePvPrevEl.className = 'dshwv-bubprev';
-        card.appendChild(bubblePvPrevEl);
-        bubblePvEl.addEventListener('dragover', function (e) {
-          try {
-            if (e.target && e.target.closest && e.target.closest('.dshwv-pvrow')) return;
-            e.preventDefault();
-          } catch (err) {}
-        });
-        bubblePvEl.addEventListener('drop', function (e) {
-          try {
-            if (e.target && e.target.closest && e.target.closest('.dshwv-pvrow')) return;
-            e.preventDefault();
-            if (bubbleModDrag) {
-              var mdd = bubbleModDrag;
-              bubbleModDrag = null;
-              bubblePvDropBlockEnd(mdd.ri, mdd.mi);
-              return;
-            }
-            var key = bubbleDragKey;
-            if (!key) return;
-            bubbleDragKey = null;
-            if (key === 'image') {
-              bubblePickImageToAdd();
-              return;
-            }
-            if (key === 'wizard') {
-              bubbleModuleAdd({
-                type: 'text',
-                text: '新内容',
-                size: 6,
-                bold: true
-              });
-              return;
-            }
-            var m = bubblePaletteModule(key);
-            if (m) bubbleModuleAdd(m);
-          } catch (err) {}
-        });
-        var btns = document.createElement('div');
-        btns.className = 'dshwv-bubbtns';
-        function cleanup() {
-          try {
-            WhaleMoney.clearBindings(mask);
-            document.body.removeChild(mask);
-            bubbleEditItems = bkEditItems;
-            bubbleEditorSnap = bkEditorSnap;
-            bubbleItemSnap = bkItemSnap;
-            bubbleEditItemIdx = bkEditIdx;
-            bubbleEditSide = bkSide;
-            bubblePalEl = bkPal;
-            bubblePvEl = bkPv;
-            bubblePvPrevEl = bkPrev;
-            renderBubblePv = bkRenderPv;
-            qeditEnsure = bkQeditEnsure;
-            if (moduleMask) moduleMask.style.zIndex = bkModMaskZ;
-            var zsEl = document.getElementById('dshw-remind-overlay-z');
-            if (zsEl) {
-              try {
-                document.head.removeChild(zsEl);
-              } catch (err) {}
-            }
-            window.__dshwRemindMask = null;
-          } catch (err) {}
-        }
-        var noBtn = document.createElement('button');
-        noBtn.type = 'button';
-        noBtn.className = 'dshwv-bubbtn dshwv-bubbtn-no';
-        noBtn.textContent = '取消';
-        noBtn.addEventListener('click', cleanup);
-        btns.appendChild(noBtn);
-        var resBtn = document.createElement('button');
-        resBtn.type = 'button';
-        resBtn.className = 'dshwv-bubbtn dshwv-bubbtn-no';
-        resBtn.textContent = '恢复默认';
-        resBtn.title = '恢复为默认提醒内容(触发条件保持不变)';
-        resBtn.addEventListener('click', function () {
-          step.modules = JSON.parse(JSON.stringify(usageRemindDefaultLines(isAlert)));
-          renderBubblePv();
-        });
-        btns.appendChild(resBtn);
-        var okBtn = document.createElement('button');
-        okBtn.type = 'button';
-        okBtn.className = 'dshwv-bubbtn dshwv-bubbtn-ok';
-        okBtn.textContent = '保存';
-        okBtn.addEventListener('click', function () {
-          if (!numInp.reportValidity()) return;
-          try {
-            bubbleRowsCanon(step.modules);
-          } catch (err) {}
-          var o = {
-            on: chk.checked,
-            lines: JSON.parse(JSON.stringify(step.modules)),
-            autoClose: acChk.checked,
-            ttlSec: Math.max(0, Number(secInp.value) || 0)
-          };
-          if (isAlert) o.below = nativeDraft; else o.amount = nativeDraft;
-          cleanup();
-          if (onSave) onSave(o);
-        });
-        btns.appendChild(okBtn);
-        card.appendChild(btns);
-        try {
-          if (moduleMask) moduleMask.style.zIndex = '27000';
-        } catch (err) {}
-        var remindZStyle = document.createElement('style');
-        remindZStyle.id = 'dshw-remind-overlay-z';
-        remindZStyle.textContent = '.dshwv-confirmmask,.dshwv-cropmask,.dshwv-audiomask,.dshwv-snapmask,.dshwv-usage-mask{z-index:28500!important}';
-        document.head.appendChild(remindZStyle);
-        var qeditEnsureSuper = bkQeditEnsure;
-        qeditEnsure = function () {
-          var el = qeditEnsureSuper();
-          try {
-            if (el) el.style.zIndex = '28000';
-          } catch (err) {}
-          return el;
-        };
-        try {
-          if (qeditEl) qeditEl.style.zIndex = '28000';
-        } catch (err) {}
-        var renderPvSuper = bkRenderPv;
-        renderBubblePv = function () {
-          try {
-            renderPvSuper();
-          } catch (err) {}
-          try {
-            var it = bubbleEditTarget();
-            var below = isAlert ? nativeDraft : null;
-            var amount = isAlert ? null : nativeDraft;
-            if (it && Array.isArray(it.modules) && bubblePvPrevEl) bubblePreviewInto(bubblePvPrevEl, usageAlertModsResolved(it.modules, below, amount));
-          } catch (err) {}
-        };
-        function editNativeAmount() {
-          try {
-            var inputValue = Number(numInp.value);
-            if (!isFinite(inputValue) || inputValue < 0 || numInp.value === '') throw new Error('请输入有效金额');
-            nativeDraft = WhaleMoney.fromDisplay(inputValue, nativeCurrency);
-            numInp.setCustomValidity(''); renderBubblePv();
-          } catch (err) { numInp.setCustomValidity(err.message); }
-        }
-        numInp.addEventListener('input', editNativeAmount);
-        chk.addEventListener('change', renderBubblePv);
-        mask.appendChild(card);
-        mask.addEventListener('click', function (e) {
-          if (e.target === mask) cleanup();
-        });
-        window.__dshwRemindMask = mask;
-        document.body.appendChild(mask);
-        renderBubblePal();
-        renderBubblePv();
-      } catch (err) {}
-    }
-    function buildUsageSettingsArea() {
-      var S = usageSet || ({});
-      var stA = S.alert || ({
-        on: false,
-        below: 50
-      });
-      var stB = S.budget || ({
-        on: false,
-        amount: 20
-      });
-      function mkRow(labelTxt, key, stateFn, persist) {
-        var row = menuRow();
-        var lb = menuLabel(labelTxt);
-        lb.style.flex = '0 0 auto';
-        row.appendChild(lb);
-        var info = document.createElement('span');
-        info.className = 'dshwv-usage-hint';
-        info.style.flex = '1';
-        info.style.textAlign = 'right';
-        info.style.paddingRight = '6px';
-        info.style.whiteSpace = 'nowrap';
-        info.style.overflow = 'hidden';
-        info.style.textOverflow = 'ellipsis';
-        row.appendChild(info);
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'dshwv-roleimport';
-        btn.textContent = '编辑';
-        btn.title = '打开配置卡片(启用 / 数值 / 提醒文案)';
-        btn.addEventListener('click', function () {
-          usageAlertBudgetEditor(key, function (o) {
-            persist(o);
-            info.textContent = stateFn();
-          });
-        });
-        row.appendChild(btn);
-        usagePanel.appendChild(row);
-        info.dataset.moneyRole = key;
-        WhaleMoney.bind(info, stateFn);
-      }
-      mkRow('余额预警', 'alert', function () {
-        var current = usageSet && usageSet.alert || {};
-        if (!current.on) return '已关闭';
-        return '余额 ≤ ' + usageMoney(current.below != null ? current.below : 50) + ' 时提醒';
-      }, function (o) {
-        stA.on = o.on;
-        stA.below = o.below;
-        stA.lines = o.lines;
-        stA.autoClose = o.autoClose !== false;
-        stA.ttlSec = o.ttlSec != null ? o.ttlSec : 6;
-        usageSet.alert = {
-          on: o.on,
-          below: o.below,
-          lines: o.lines,
-          autoClose: stA.autoClose,
-          ttlSec: stA.ttlSec
-        };
-        saveUsageSettings({
-          alert: usageSet.alert
-        });
-      });
-      mkRow('今日预算', 'budget', function () {
-        var current = usageSet && usageSet.budget || {};
-        if (!current.on) return '已关闭';
-        return '已用 ≥ ' + usageMoney(current.amount != null ? current.amount : 20) + ' 时提醒';
-      }, function (o) {
-        stB.on = o.on;
-        stB.amount = o.amount;
-        stB.lines = o.lines;
-        stB.autoClose = o.autoClose !== false;
-        stB.ttlSec = o.ttlSec != null ? o.ttlSec : 6;
-        usageSet.budget = {
-          on: o.on,
-          amount: o.amount,
-          lines: o.lines,
-          autoClose: stB.autoClose,
-          ttlSec: stB.ttlSec
-        };
-        saveUsageSettings({
-          budget: usageSet.budget
-        });
-      });
-    }
-    function refreshUsageMain() {
-      if (!usageMainEl) return;
-      usageMainEl.innerHTML = '';
-      var body = document.createElement('div');
-      body.textContent = '加载中…';
-      usageMainEl.appendChild(body);
-      usageClient.records().then(function (d) {
-        if (d && d.ok && d.settings) usageSet = d.settings;
-        WhaleMoney.refreshBindings(usagePanel);
-        fillUsagePanel(d);
-        if (state.todayUsageSource !== 'source-api' && d && d.ok && d.today && isFinite(Number(d.today.total))) {
-          var recTotal = Number(d.today.total);
-          if (state.todayUsage === null || recTotal >= state.todayUsage) {
-            state.todayUsage = recTotal;
-
-          }
-        }
-      }).catch(function () {
-        usageMainEl.textContent = '记录加载失败';
-      });
-    }
-    function uSectionTitle(leftTxt, rightTxt) {
-      var h = document.createElement('div');
-      h.className = 'dshwv-usage-sec';
-      var l = document.createElement('span');
-      l.textContent = leftTxt;
-      h.appendChild(l);
-      var r = document.createElement('span');
-      r.className = 'dshwv-usage-total';
-      if (typeof rightTxt === 'function') WhaleMoney.bind(r, rightTxt); else r.textContent = rightTxt;
-      h.appendChild(r);
-      return h;
-    }
-    function fillUsagePanel(d) {
-      var hostEl = usageMainEl || usagePanel;
-      hostEl.innerHTML = '';
-      var wrap = document.createElement('div');
-      wrap.className = 'dshwv-usagebody';
-      if (!d || !d.ok) {
-        wrap.textContent = '记录加载失败';
-        hostEl.appendChild(wrap);
-        return;
-      }
-      var overall = d.overall;
-      if (overall && overall.ok) {
-        wrap.appendChild(uSectionTitle('全部 API 总消耗（会话）', usageTokens(overall.all && overall.all.tokens)));
-        var totalBox = document.createElement('div');
-        totalBox.className = 'dshwv-usage-scroll dshwv-usage-today';
-        [['今天', overall.today], ['近7天', overall.total7], ['累计', overall.all]].forEach(function (pair) {
-          var row = document.createElement('div'); row.className = 'dshwv-usage-row';
-          var label = document.createElement('span'); label.textContent = pair[0]; row.appendChild(label);
-          var stat = document.createElement('span'); stat.textContent = usageTokens(pair[1] && pair[1].tokens); row.appendChild(stat);
-          totalBox.appendChild(row);
-        });
-        var observed = overall.observed || [];
-        if (observed.length) {
-          observed.forEach(function (row) {
-            var line = document.createElement('div'); line.className = 'dshwv-usage-hint';
-            line.textContent = row.currency + '：今日已观测 ' + Number(row.today || 0).toLocaleString('en-US', { maximumFractionDigits: 6 }) + ' · 近7天 ' + Number(row.total7 || 0).toLocaleString('en-US', { maximumFractionDigits: 6 });
-            totalBox.appendChild(line);
-          });
-        }
-        (overall.sources || []).forEach(function (source) {
-          var line = document.createElement('div'); line.className = 'dshwv-usage-row';
-          var name = document.createElement('span'); name.className = 'dshwv-usage-model'; name.textContent = source.name || '未命名来源'; line.appendChild(name);
-          var stat = document.createElement('span'); stat.textContent = usageTokens(source.total7 && source.total7.tokens); stat.title = '近7天 · 累计 ' + usageTokens(source.all && source.all.tokens) + ' · ' + usageRawAmounts(source.total7 && source.total7.amounts); line.appendChild(stat);
-          totalBox.appendChild(line);
-        });
-        wrap.appendChild(totalBox);
-      }
-      var today = d.today || ({});
-      var todayModels = today.models || [];
-      var hasEvToday = todayModels.length > 0;
-      wrap.appendChild(uSectionTitle('今日已观测 / 模型估算', usageMoneyText(today.total)));
-      var todayBox = document.createElement('div');
-      todayBox.className = 'dshwv-usage-scroll dshwv-usage-today';
-      if (hasEvToday) {
-        todayModels.forEach(function (row) {
-          var r = document.createElement('div');
-          r.className = 'dshwv-usage-row';
-          var n = document.createElement('span');
-          n.textContent = row.model || '未知';
-          n.className = 'dshwv-usage-model';
-          r.appendChild(n);
-          var c = document.createElement('span');
-          bindUsageMoney(c, row.cost);
-          r.appendChild(c);
-          todayBox.appendChild(r);
-        });
-      } else if ((today.total || 0) > 0) {
-        var noM = document.createElement('div');
-        noM.className = 'dshwv-usage-hint';
-        noM.textContent = '今日总额来自余额差值,暂不含模型明细(启用会话记录后将按模型展示)';
-        todayBox.appendChild(noM);
-      } else {
-        var empty = document.createElement('div');
-        empty.className = 'dshwv-usage-hint';
-        empty.textContent = '今日暂无消费记录';
-        todayBox.appendChild(empty);
-      }
-      wrap.appendChild(todayBox);
-      wrap.appendChild(uSectionTitle(d.total7Complete === false ? '近7天使用记录（已知小计）' : '近7天使用记录', usageMoneyText(d.total7)));
-      var daysBox = document.createElement('div');
-      daysBox.className = 'dshwv-usage-scroll dshwv-usage-days';
-      (d.days7 || []).forEach(function (row) {
-        var r = document.createElement('div');
-        r.className = 'dshwv-usage-row';
-        var n = document.createElement('span');
-        n.textContent = usageDayLabel(row.date);
-        r.appendChild(n);
-        var c = document.createElement('span');
-        bindUsageMoney(c, row.total);
-        r.appendChild(c);
-        daysBox.appendChild(r);
-      });
-      wrap.appendChild(daysBox);
-      var more = document.createElement('button');
-      more.type = 'button';
-      more.className = 'dshwv-usage-more';
-      more.textContent = '更多消费记录…';
-      more.title = '打开窗口查看全部有记录的消费';
-      more.addEventListener('click', function (e) {
-        e.stopPropagation();
-        openUsageRecordsWindow();
-      });
-      wrap.appendChild(more);
-      (usageMainEl || usagePanel).appendChild(wrap);
-    }
-    var usageMoreMask = document.createElement('div');
-    usageMoreMask.className = 'dshwv-usage-mask';
-    usageMoreMask.style.display = 'none';
-    var usageMoreCard = document.createElement('div');
-    usageMoreCard.className = 'dshwv-usage-card';
-    usageMoreMask.appendChild(usageMoreCard);
-    usageMoreMask.addEventListener('click', function (e) {
-      if (e.target === usageMoreMask) closeUsageRecordsWindow();
-    });
-    document.body.appendChild(usageMoreMask);
-    function openUsageRecordsWindow() {
-      usageMoreCard.innerHTML = '<div style="padding:10px;color:#203170">加载中…</div>';
-      usageMoreMask.style.display = 'flex';
-      usageClient.records().then(function (d) {
-        fillUsageRecordsWindow(d);
-      }).catch(function () {
-        usageMoreCard.innerHTML = '<div style="padding:10px;color:#203170">加载失败</div>';
-      });
-    }
-    function closeUsageRecordsWindow() {
-      usageMoreMask.style.display = 'none';
-    }
     var resMaskEl = null;
     var resCardEl = null;
     function resMaskOpen() {
@@ -2233,751 +1469,6 @@
         }
       } catch (err) {}
     }
-    var usageAlertBelowFired = false;
-    var usageBudgetFiredKey = null;
-    function usageTodayKeyStr() {
-      var d = new Date();
-      var p = function (n) {
-        return String(n).padStart(2, '0');
-      };
-      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-    }
-    function usageRemindDefaultLines(isAlert) {
-      return [{
-        type: 'text',
-        text: isAlert ? '余额已低于 {currency}{below}' : '今日已观测已达预算 {currency}{amount}',
-        size: 7,
-        bold: true
-      }];
-    }
-    function usageRemindTtlMs(cfg) {
-      cfg = cfg || ({});
-      if (cfg.autoClose === false) return 0;
-      var s = Number(cfg.ttlSec);
-      if (cfg.ttlSec !== undefined && isFinite(s) && s > 0) return Math.max(500, Math.round(s * 1000));
-      return USAGE_ALERT_TTL;
-    }
-    function usageRemindLinesOf(cfg, isAlert) {
-      cfg = cfg || ({});
-      if (Array.isArray(cfg.lines) && cfg.lines.length) return cfg.lines;
-      return usageRemindDefaultLines(isAlert);
-    }
-    function usageFillText(txt, below, amount, currency) {
-      return String(txt || '').replace(/\{currency\}/g, whaleCurrencySymbol()).replace(/\{below\}/g, below != null ? WhaleMoney.formatNumber(below, currency) : '').replace(/\{amount\}/g, amount != null ? WhaleMoney.formatNumber(amount, currency) : '');
-    }
-    function usageLineFontPx(level) {
-      var n = Math.max(1, Math.min(50, Math.round(Number(level) || 7)));
-      return Math.min(40, Math.round(12 + (n - 1) * 0.8));
-    }
-    function usageAppendLine(body, m, below, amount) {
-      try {
-        m = m || ({});
-        var raw = String(m.text != null ? m.text : '');
-        var txt = usageFillText(raw, below, amount);
-        var div = document.createElement('div');
-        div.style.margin = '4px auto';
-        div.style.maxWidth = '100%';
-        if (!txt) {
-          div.style.height = '8px';
-          div.style.margin = '2px auto';
-          body.appendChild(div);
-          return;
-        }
-        var nativeCurrency = state.currency || 'USD';
-        WhaleMoney.bind(div, function () { return usageFillText(raw, below, amount, nativeCurrency); });
-        div.style.display = 'inline-block';
-        div.style.textAlign = 'center';
-        div.style.whiteSpace = 'pre-wrap';
-        div.style.wordBreak = 'break-word';
-        div.style.fontSize = usageLineFontPx(m.size) + 'px';
-        div.style.lineHeight = '1.4';
-        if (m.bold) div.style.fontWeight = '700';
-        if (m.italic) div.style.fontStyle = 'italic';
-        if (m.ul) div.style.textDecoration = 'underline';
-        if (m.fontFamily) div.style.fontFamily = m.fontFamily;
-        var bg = m.bg ? String(m.bg) : '';
-        if (bg) {
-          div.style.background = bg;
-          div.style.borderRadius = '7px';
-          div.style.padding = '1px 8px';
-        }
-        var col = m.color ? String(m.color) : '';
-        if (col && !m.rgb && !m.bgRgb) div.style.color = col;
-        body.appendChild(div);
-      } catch (err) {}
-    }
-    function checkUsageAlerts(balance, todayUsage) {
-      try {
-        if (!usageSet) return;
-        var a = usageSet.alert;
-        if (a && a.on) {
-          var below = Number(a.below);
-          if (isFinite(below) && typeof balance === 'number' && balance > 0 && balance <= below) {
-            if (!usageAlertBelowFired) {
-              usageAlertBelowFired = true;
-              showUsagePopup('余额预警', usageRemindLinesOf(a, true), below, null, 2, a);
-            }
-          } else if (typeof balance === 'number' && balance > below) {
-            usageAlertBelowFired = false;
-          }
-        }
-        var b = usageSet.budget;
-        if (b && b.on) {
-          var amt = Number(b.amount);
-          if (isFinite(amt) && amt > 0 && typeof todayUsage === 'number' && todayUsage >= amt) {
-            var key = usageTodayKeyStr() + ':' + String(amt);
-            if (usageBudgetFiredKey !== key) {
-              usageBudgetFiredKey = key;
-              showUsagePopup('今日预算提醒', usageRemindLinesOf(b, false), null, amt, 1, b);
-            }
-          }
-        }
-      } catch (err) {}
-    }
-    function usageAlertModsResolved(mods, below, amount) {
-      var out = [];
-      try {
-        for (var i = 0; i < mods.length; i++) {
-          var m0 = mods[i] || ({});
-          var cp = JSON.parse(JSON.stringify(m0));
-          var raw = String(m0.text != null ? m0.text : '');
-          whaleMoneyTemplates.set(cp, { template: raw, below: below, amount: amount, currency: state.currency || 'USD' });
-          cp.text = raw.length ? usageFillText(raw, below, amount, state.currency || 'USD') : raw;
-          out.push(cp);
-        }
-      } catch (err) {}
-      return out;
-    }
-    function showUsagePopup(title, content, below, amount, rank, cfg) {
-      try {
-        var mods = [];
-        if (typeof content === 'string') mods = [{
-          type: 'text',
-          text: content,
-          size: 7,
-          bold: true
-        }]; else if (Array.isArray(content)) mods = content;
-        if (mods.length && pushSystemBubble({
-          kind: 'alert',
-          mods: usageAlertModsResolved(mods, below, amount),
-          rank: rank === 1 || rank === 2 ? rank : 2,
-          ttlMs: usageRemindTtlMs(cfg)
-        })) return;
-        usagePopupCard(title, content, below, amount);
-      } catch (err) {}
-    }
-    function usagePopupCard(title, content, below, amount) {
-      try {
-        var mask = document.createElement('div');
-        mask.className = 'dshwv-usage-mask';
-        var card = document.createElement('div');
-        card.className = 'dshwv-usage-card';
-        card.style.width = 'min(380px,90vw)';
-        var t = document.createElement('div');
-        t.className = 'dshwv-usage-wintitle';
-        t.textContent = title || '提示';
-        card.appendChild(t);
-        var body = document.createElement('div');
-        body.className = 'dshwv-usage-windowbody';
-        body.style.textAlign = 'center';
-        if (typeof content === 'string') {
-          body.textContent = usageFillText(content, below, amount);
-          body.style.whiteSpace = 'pre-wrap';
-        } else if (Array.isArray(content)) {
-          for (var i = 0; i < content.length; i++) usageAppendLine(body, content[i], below, amount);
-        } else {
-          body.textContent = '';
-        }
-        card.appendChild(body);
-        var btns = document.createElement('div');
-        btns.className = 'dshwv-bubbtns';
-        btns.style.justifyContent = 'center';
-        var ok = document.createElement('button');
-        ok.type = 'button';
-        ok.className = 'dshwv-bubbtn dshwv-bubbtn-ok';
-        ok.textContent = '知道了';
-        ok.addEventListener('click', function () {
-          try {
-            document.body.removeChild(mask);
-          } catch (err) {}
-        });
-        btns.appendChild(ok);
-        card.appendChild(btns);
-        mask.appendChild(card);
-        mask.addEventListener('click', function (e) {
-          if (e.target === mask) {
-            try {
-              document.body.removeChild(mask);
-            } catch (err) {}
-          }
-        });
-        document.body.appendChild(mask);
-      } catch (err) {}
-    }
-    var USAGE_PALETTE = ['#203170', '#e0433f', '#2fa24c', '#b060c8', '#e89a2e', '#3aa6c8', '#d06a8a', '#7a8b2f', '#6a6ad0', '#c84a8a'];
-    function usageAggModels(daysArr) {
-      var map = {};
-      (daysArr || []).forEach(function (day) {
-        ;
-        (day.models || []).forEach(function (mm) {
-          var k = mm && mm.model ? mm.model : '未知';
-          map[k] = (map[k] || 0) + (Number(mm.cost) || 0);
-        });
-      });
-      return Object.keys(map).map(function (k) {
-        return {
-          model: k,
-          cost: map[k]
-        };
-      }).sort(function (a, b) {
-        return b.cost - a.cost;
-      });
-    }
-    function usageRatioRows(body, secTitle, agg, totalLabel) {
-      body.appendChild(uSectionTitle(secTitle, totalLabel));
-      if (!agg.length) {
-        var no = document.createElement('div');
-        no.className = 'dshwv-usage-hint';
-        no.textContent = '暂无模型明细';
-        body.appendChild(no);
-        return;
-      }
-      var sum = agg.reduce(function (a, x) {
-        return a + x.cost;
-      }, 0) || 1;
-      var costEls = [];
-      agg.forEach(function (row, i) {
-        var wr = document.createElement('div');
-        wr.className = 'dshwv-usage-ratio';
-        var lab = document.createElement('span');
-        lab.className = 'dshwv-usage-ratio-label';
-        lab.textContent = row.model;
-        lab.title = row.model;
-        wr.appendChild(lab);
-        var track = document.createElement('div');
-        track.className = 'dshwv-usage-ratio-track';
-        var fill = document.createElement('div');
-        fill.className = 'dshwv-usage-ratio-fill';
-        fill.style.width = Math.round(row.cost / sum * 100) + '%';
-        fill.style.background = USAGE_PALETTE[i % USAGE_PALETTE.length];
-        track.appendChild(fill);
-        wr.appendChild(track);
-        var pct = document.createElement('span');
-        pct.className = 'dshwv-usage-ratio-pct';
-        pct.textContent = Math.round(row.cost / sum * 100) + '%';
-        wr.appendChild(pct);
-        var cost = document.createElement('span');
-        cost.className = 'dshwv-usage-ratio-cost';
-        bindUsageMoney(cost, row.cost);
-        cost.title = cost.textContent;
-        wr.appendChild(cost);
-        costEls.push(cost);
-        body.appendChild(wr);
-      });
-      try {
-        var parW = costEls[0] && costEls[0].parentNode ? costEls[0].parentNode.clientWidth : 420;
-        var capCost = Math.max(50, Math.floor(parW - 96 - 42 - 32));
-        var maxCost = 40;
-        for (var c1 = 0; c1 < costEls.length; c1++) {
-          var cw1 = costEls[c1].scrollWidth || 40;
-          if (cw1 > maxCost) maxCost = cw1;
-        }
-        var useCost = Math.min(maxCost, capCost);
-        for (var c2 = 0; c2 < costEls.length; c2++) {
-          costEls[c2].style.width = useCost + 'px';
-          costEls[c2].style.textAlign = 'right';
-          costEls[c2].style.overflow = 'hidden';
-          costEls[c2].style.textOverflow = 'ellipsis';
-        }
-      } catch (err) {}
-    }
-    function usageDrawBarChart(body, secTitle, days, opts) {
-      opts = opts || ({});
-      var todayKey = String(opts.today || '');
-      var onPick = opts.onPick || null;
-      body.appendChild(uSectionTitle(secTitle, ''));
-      if (!days || !days.length) {
-        var no = document.createElement('div');
-        no.className = 'dshwv-usage-hint';
-        no.textContent = '暂无每日数据';
-        body.appendChild(no);
-        return;
-      }
-      var wrap = document.createElement('div');
-      wrap.className = 'dshwv-usage-chartwrap';
-      var canvas = document.createElement('canvas');
-      wrap.appendChild(canvas);
-      var tip = document.createElement('div');
-      tip.className = 'dshwv-usage-tip';
-      tip.style.display = 'none';
-      wrap.appendChild(tip);
-      body.appendChild(wrap);
-      var bars = [];
-      function paint(hoverIdx) {
-        var cw = Math.max(120, wrap && (wrap.clientWidth || (wrap.getBoundingClientRect ? wrap.getBoundingClientRect().width : 0)) || canvas.clientWidth || 520);
-        var ch = 150;
-        var dpr = window.devicePixelRatio || 1;
-        canvas.width = Math.max(1, Math.round(cw * dpr));
-        canvas.height = Math.max(1, Math.round(ch * dpr));
-        canvas.style.width = cw + 'px';
-        canvas.style.height = ch + 'px';
-        var g = canvas.getContext('2d');
-        g.setTransform(dpr, 0, 0, dpr, 0, 0);
-        g.clearRect(0, 0, cw, ch);
-        var padL = 42, padR = 10, padT = 10, padB = 22;
-        var iw = cw - padL - padR;
-        var ih = ch - padT - padB;
-        var max = 1;
-        for (var i = 0; i < days.length; i++) max = Math.max(max, Number(days[i].total) || 0);
-        var step = iw / days.length;
-        var bw = Math.max(3, Math.min(36, step * 0.62));
-        bars = [];
-        for (var k = 0; k < days.length; k++) {
-          var unknown = days[k].total == null || !Number.isFinite(Number(days[k].total));
-          var val = unknown ? 0 : Number(days[k].total);
-          var h = val > 0 ? Math.max(2, val / max * ih) : 0;
-          var x = padL + step * k + (step - bw) / 2;
-          var y = padT + ih - h;
-          var kToday = !!(todayKey && String(days[k].date || '') === todayKey);
-          g.fillStyle = k === hoverIdx ? '#e0433f' : kToday ? '#2fa44c' : '#203170';
-          if (k === hoverIdx) {
-            g.globalAlpha = 0.9;
-          }
-          if (unknown) {
-            g.fillStyle = '#9fb0d9'; g.font = '11px sans-serif'; g.textAlign = 'center';
-            g.fillText('?', x + bw / 2, padT + ih - 3);
-          } else if (h > 0) {
-            g.fillRect(x, y, bw, h);
-          } else {
-            g.fillStyle = 'rgba(32,49,112,.25)';
-            g.fillRect(x, padT + ih - 3, bw, 3);
-          }
-          g.globalAlpha = 1;
-          bars.push({
-            x: x,
-            w: bw,
-            day: days[k]
-          });
-          if (days.length <= 16 || k % Math.ceil(days.length / 16) === 0) {
-            g.fillStyle = '#9fb0d9';
-            g.font = '10px sans-serif';
-            g.textAlign = 'center';
-            var dl = String(days[k].date || '').split('-');
-            var lab = dl.length === 3 ? dl[1] + '-' + dl[2] : days[k].date;
-            g.fillText(lab, x + bw / 2, ch - 8);
-          }
-        }
-        g.fillStyle = '#9fb0d9';
-        g.font = '10px sans-serif';
-        g.textAlign = 'right';
-        g.fillText(usageMoney(max), padL - 4, padT + 8);
-        g.fillText(usageMoney(max / 2), padL - 4, padT + ih / 2 + 3);
-        g.fillText(usageMoney(0), padL - 4, padT + ih + 4);
-      }
-      function move(ev) {
-        var r = canvas.getBoundingClientRect();
-        var x = ev.clientX - r.left;
-        var hover = -1;
-        for (var i = 0; i < bars.length; i++) {
-          if (x >= bars[i].x && x <= bars[i].x + bars[i].w) {
-            hover = i;
-            break;
-          }
-        }
-        paint(hover);
-        if (hover >= 0) {
-          tip.style.display = 'block';
-          var day = bars[hover].day, currency = state.currency || 'USD';
-          WhaleMoney.bind(tip, function () { return day.date + '  ' + (day.total == null ? '汇总未知' : usageMoney(day.total, currency)); });
-          var wr = wrap.getBoundingClientRect();
-          var tx = ev.clientX - wr.left + 10;
-          if (tx + 130 > wr.width) tx = ev.clientX - wr.left - 140;
-          var ty = ev.clientY - wr.top + 12;
-          tip.style.left = Math.max(0, tx) + 'px';
-          tip.style.top = Math.max(0, ty) + 'px';
-        } else {
-          tip.style.display = 'none';
-        }
-      }
-      canvas.addEventListener('mousemove', move);
-      canvas.addEventListener('mouseleave', function () {
-        tip.style.display = 'none';
-        paint(-1);
-      });
-      if (onPick) {
-        canvas.addEventListener('click', function (ev) {
-          try {
-            var rc = canvas.getBoundingClientRect();
-            var cx = ev.clientX - rc.left;
-            for (var bi = 0; bi < bars.length; bi++) {
-              if (cx >= bars[bi].x && cx <= bars[bi].x + bars[bi].w) {
-                onPick(bars[bi].day.date);
-                break;
-              }
-            }
-          } catch (err) {}
-        });
-      }
-      WhaleMoney.bind(canvas, function () { return WhaleMoney.state().displayCurrency; }, function () { paint(-1); tip.style.display = 'none'; });
-      try {
-        setTimeout(function () {
-          try {
-            paint(-1);
-          } catch (err) {}
-        }, 420);
-      } catch (err) {}
-    }
-    function usageSlide(el, open) {
-      try {
-        if (!el) return;
-        if (el.__dshwSlide) clearTimeout(el.__dshwSlide);
-        el.style.transition = 'max-height .24s ease, opacity .16s ease';
-        el.style.overflow = 'hidden';
-        if (open) {
-          el.style.display = 'block';
-          var h0 = el.scrollHeight;
-          if (h0 <= 0) h0 = 100;
-          el.style.opacity = '0';
-          el.style.maxHeight = '0px';
-          void el.offsetHeight;
-          el.style.opacity = '1';
-          el.style.maxHeight = h0 + 'px';
-          el.__dshwSlide = setTimeout(function () {
-            el.style.maxHeight = '';
-            el.style.overflow = '';
-            el.style.transition = '';
-            el.__dshwSlide = null;
-          }, 260);
-        } else {
-          var ch = el.scrollHeight;
-          if (ch <= 0) {
-            el.style.display = 'none';
-            el.style.transition = '';
-            return;
-          }
-          el.style.maxHeight = ch + 'px';
-          void el.offsetHeight;
-          el.style.opacity = '0';
-          el.style.maxHeight = '0px';
-          el.__dshwSlide = setTimeout(function () {
-            el.style.display = 'none';
-            el.style.maxHeight = '';
-            el.style.opacity = '';
-            el.style.overflow = '';
-            el.style.transition = '';
-            el.__dshwSlide = null;
-          }, 250);
-        }
-      } catch (err) {
-        try {
-          el.style.display = open ? 'block' : 'none';
-        } catch (err2) {}
-      }
-    }
-    function usageCollapseBlock(parent, label, openDefault, build) {
-      var box = document.createElement('div');
-      var hd = document.createElement('button');
-      hd.type = 'button';
-      hd.className = 'dshwv-usage-collapse';
-      var inner = document.createElement('div');
-      inner.className = 'dshwv-usage-collapse-body';
-      inner.style.display = 'none';
-      var opened = false;
-      var st = false;
-      function ensureBuild() {
-        if (!opened) {
-          opened = true;
-          try {
-            build(inner);
-          } catch (err) {}
-        }
-      }
-      function openNow() {
-        st = true;
-        inner.style.display = 'block';
-        inner.style.maxHeight = '0px';
-        inner.style.overflow = 'hidden';
-        ensureBuild();
-        usageSlide(inner, true);
-        paint();
-      }
-      function closeNow() {
-        st = false;
-        usageSlide(inner, false);
-        paint();
-      }
-      function paint() {
-        hd.innerHTML = '';
-        var l = document.createElement('span');
-        l.textContent = label;
-        hd.appendChild(l);
-        var ch = document.createElement('span');
-        ch.className = 'dshwv-usage-chev';
-        ch.textContent = st ? '▾' : '▸';
-        hd.appendChild(ch);
-      }
-      hd.addEventListener('click', function () {
-        if (st) closeNow(); else openNow();
-      });
-      box.__open = openNow;
-      box.__close = closeNow;
-      paint();
-      box.appendChild(hd);
-      box.appendChild(inner);
-      parent.appendChild(box);
-      if (openDefault) openNow();
-      return box;
-    }
-    function usageEvTime(ev) {
-      try {
-        var dd = new Date(ev.ts);
-        var p2 = function (n) {
-          return String(n).padStart(2, '0');
-        };
-        return p2(dd.getHours()) + ':' + p2(dd.getMinutes());
-      } catch (err) {
-        return '';
-      }
-    }
-    function fillUsageRecordsWindow(d) {
-      var card = usageMoreCard;
-      card.innerHTML = '';
-      var title = document.createElement('div');
-      title.className = 'dshwv-usage-wintitle';
-      title.textContent = '消费记录(全部)';
-      card.appendChild(title);
-      var closeBtn = document.createElement('button');
-      closeBtn.type = 'button';
-      closeBtn.className = 'dshwv-usage-close';
-      closeBtn.textContent = '×';
-      closeBtn.title = '关闭';
-      closeBtn.addEventListener('click', closeUsageRecordsWindow);
-      card.appendChild(closeBtn);
-      var body = document.createElement('div');
-      body.className = 'dshwv-usage-windowbody';
-      card.appendChild(body);
-      if (!d || !d.ok) {
-        body.textContent = '加载失败';
-        return;
-      }
-      var allDays = (d.all && d.all.days || []).slice().sort(function (a, b) {
-        return a.date < b.date ? -1 : 1;
-      });
-      var evAll = (d.all && d.all.events || []).slice();
-      var sumAll = 0;
-      var maxDay = null;
-      var missingDays = 0;
-      for (var s1 = 0; s1 < allDays.length; s1++) {
-        if (allDays[s1].total == null || !Number.isFinite(Number(allDays[s1].total))) { missingDays++; continue; }
-        sumAll += Number(allDays[s1].total);
-        if (!maxDay || Number(allDays[s1].total) > Number(maxDay.total)) maxDay = allDays[s1];
-      }
-      var totalIncomplete = missingDays > 0 || d.all && d.all.totalComplete === false;
-      var ov = document.createElement('div');
-      ov.className = 'dshwv-usage-oview';
-      var ovL = document.createElement('div');
-      ovL.textContent = totalIncomplete ? '全部消费（已知小计）' : '全部消费';
-      ov.appendChild(ovL);
-      var ovN = document.createElement('div');
-      ovN.className = 'dshwv-usage-oview-num';
-      if (totalIncomplete && !maxDay) ovN.textContent = '未知';
-      else bindUsageMoney(ovN, sumAll);
-      ov.appendChild(ovN);
-      var ovS = document.createElement('div');
-      ovS.className = 'dshwv-usage-hint';
-      var recordCurrency = state.currency || 'USD';
-      WhaleMoney.bind(ovS, function () { return '显示最近 ' + evAll.length + ' 笔明细' +
-        (totalIncomplete ? ' · ' + missingDays + ' 天汇总未知，未计入小计' : '') +
-        (maxDay ? ' · 已知峰值 ' + maxDay.date + ' ' + usageMoney(maxDay.total, recordCurrency) : ''); });
-      ov.appendChild(ovS);
-      body.appendChild(ov);
-      var detailBox = null;
-      usageCollapseBlock(body, '统计图表(近30天 / 模型占比)', false, function (inner) {
-        usageDrawBarChart(inner, '近30天消费(绿柱=今天,点柱定位到当日)', allDays.slice(-30), {
-          today: usageTodayKeyStr(),
-          onPick: function (date) {
-            try {
-              if (!detailBox) return;
-              detailBox.__open();
-              setTimeout(function () {
-                var tr = detailBox.querySelector('[data-usage-day="' + String(date) + '"]');
-                if (tr) {
-                  tr.scrollIntoView({
-                    block: 'center',
-                    behavior: 'smooth'
-                  });
-                  tr.style.boxShadow = 'inset 0 0 0 2px rgba(32,49,112,.55)';
-                  setTimeout(function () {
-                    tr.style.boxShadow = '';
-                  }, 1400);
-                }
-              }, 120);
-            } catch (err) {}
-          }
-        });
-        var todayAgg = usageAggModels(d.today && d.today.models ? [{
-          models: d.today.models
-        }] : []);
-        usageRatioRows(inner, '今日模型估算占比', todayAgg, usageMoneyText(d.today && d.today.total || 0));
-        var sevenAgg = usageAggModels(d.days7 || []);
-        usageRatioRows(inner, d.total7Complete === false ? '近7天模型估算占比（合计不完整）' : '近7天模型估算占比', sevenAgg, usageMoneyText(d.total7));
-      });
-      detailBox = usageCollapseBlock(body, '每日与逐条明细', false, function (inner) {
-        var search = document.createElement('input');
-        search.type = 'text';
-        search.className = 'dshwv-colnat';
-        search.style.width = '100%';
-        search.style.margin = '2px 0 6px';
-        search.placeholder = '搜索:日期(如 07-21)或模型名,过滤逐条明细…';
-        inner.appendChild(search);
-        var evMap = {};
-        evAll.forEach(function (ev) {
-          var day = ev.day || '';
-          if (!day) {
-            try {
-              var dd2 = new Date(ev.ts);
-              day = dd2.getFullYear() + '-' + String(dd2.getMonth() + 1).padStart(2, '0') + '-' + String(dd2.getDate()).padStart(2, '0');
-            } catch (err) {}
-          }
-          if (!day) return;
-          (evMap[day] = evMap[day] || []).push(ev);
-        });
-        var dayTot = {};
-        allDays.forEach(function (dx) {
-          dayTot[dx.date] = dx.total == null ? null : Number(dx.total);
-        });
-        var todayKeyStr2 = usageTodayKeyStr();
-        function dayGroup(day, evs) {
-          var row = document.createElement('div');
-          row.className = 'dshwv-usage-row';
-          row.style.cursor = 'pointer';
-          row.setAttribute('data-usage-day', day);
-          var name = document.createElement('span');
-          name.style.flex = '1 1 auto';
-          name.style.minWidth = '0';
-          name.style.overflow = 'hidden';
-          name.style.textOverflow = 'ellipsis';
-          name.style.whiteSpace = 'nowrap';
-          name.textContent = day + (evs.length ? ' (' + evs.length + ')' : '');
-          row.appendChild(name);
-          var c = document.createElement('span');
-          c.style.flex = '0 0 auto';
-          var dayV = dayTot[day];
-          if (dayV === undefined && day === todayKeyStr2 && d.today && d.today.total != null && isFinite(Number(d.today.total))) dayV = Number(d.today.total);
-          if (dayV == null || !isFinite(dayV)) {
-            c.textContent = '未知';
-            c.title = '旧日汇总缺失；逐轮观测区间可能重叠，不能相加补成每日账单';
-          } else bindUsageMoney(c, dayV);
-          row.appendChild(c);
-          var chev = document.createElement('span');
-          chev.className = 'dshwv-usage-chev';
-          chev.textContent = '▸';
-          row.appendChild(chev);
-          var detail = document.createElement('div');
-          detail.className = 'dshwv-usage-daydetail';
-          detail.style.display = 'none';
-          var built = false;
-          row.addEventListener('click', function (e) {
-            var on = detail.style.display !== 'block';
-            if (on) {
-              if (!built) {
-                built = true;
-                var lim = Math.min(evs.length, 100);
-                for (var i = 0; i < lim; i++) {
-                  var ev = evs[i];
-                  var r2 = document.createElement('div');
-                  r2.className = 'dshwv-usage-row';
-                  r2.style.padding = '2px 0 2px 6px';
-                  var n2 = document.createElement('span');
-                  n2.style.flex = '1 1 auto';
-                  n2.style.minWidth = '0';
-                  n2.style.overflow = 'hidden';
-                  n2.style.textOverflow = 'ellipsis';
-                  n2.style.whiteSpace = 'nowrap';
-                  n2.textContent = (usageEvTime(ev) ? usageEvTime(ev) + '  ' : '') + (ev.model || '未知');
-                  n2.title = n2.textContent;
-                  r2.appendChild(n2);
-                  var c2 = document.createElement('span');
-                  c2.style.flex = '0 0 auto';
-                  bindUsageMoney(c2, ev.cost);
-                  r2.appendChild(c2);
-                  detail.appendChild(r2);
-                }
-                if (evs.length > lim) {
-                  var moreTxt = document.createElement('div');
-                  moreTxt.className = 'dshwv-usage-hint';
-                  moreTxt.textContent = '… 该日共 ' + evs.length + ' 条,仅显示前 ' + lim + ' 条';
-                  detail.appendChild(moreTxt);
-                }
-                if (!evs.length) {
-                  var nd = document.createElement('div');
-                  nd.className = 'dshwv-usage-hint';
-                  nd.textContent = '该日仅总额(启用模型明细后展示逐条)';
-                  detail.appendChild(nd);
-                }
-              }
-              chev.textContent = '▾';
-            } else chev.textContent = '▸';
-            usageSlide(detail, on);
-          });
-          row.appendChild(detail);
-          return row;
-        }
-        var listWrap = document.createElement('div');
-        inner.appendChild(listWrap);
-        function renderGroups(q) {
-          var ql = String(q || '').trim().toLowerCase();
-          var groups = [];
-          for (var gi = 0; gi < allDays.length; gi++) {
-            var day0 = allDays[gi].date;
-            var evs = evMap[day0] || [];
-            var hit = !ql || day0.toLowerCase().indexOf(ql) >= 0;
-            if (!hit) {
-              for (var ei = 0; ei < evs.length && !hit; ei++) if (String(evs[ei].model || '').toLowerCase().indexOf(ql) >= 0) hit = true;
-            }
-            if (hit || day0 === usageTodayKeyStr() && !ql) groups.push(day0);
-          }
-          groups.sort(function (a, b) {
-            return a < b ? 1 : a > b ? -1 : 0;
-          });
-          var step = 12;
-          var shown = step;
-          listWrap.innerHTML = '';
-          if (!groups.length) {
-            var noR = document.createElement('div');
-            noR.className = 'dshwv-usage-hint';
-            noR.textContent = ql ? '没有匹配的记录' : '暂无每日记录';
-            listWrap.appendChild(noR);
-            return;
-          }
-          function paintDays() {
-            listWrap.innerHTML = '';
-            var upto = Math.min(shown, groups.length);
-            for (var k = 0; k < upto; k++) {
-              var dayK = groups[k];
-              listWrap.appendChild(dayGroup(dayK, evMap[dayK] || []));
-            }
-            if (shown < groups.length) {
-              var mb = document.createElement('button');
-              mb.type = 'button';
-              mb.className = 'dshwv-usage-more';
-              mb.textContent = '加载更早记录(还剩 ' + (groups.length - shown) + ' 天)';
-              mb.addEventListener('click', function () {
-                shown += step;
-                paintDays();
-              });
-              listWrap.appendChild(mb);
-            }
-          }
-          paintDays();
-        }
-        search.addEventListener('input', function () {
-          renderGroups(search.value);
-        });
-        renderGroups('');
-      });
-    }
-    document.body.appendChild(rolePanel);
     var SNAP_PREVIEW = 190;
     var snapPvW = SNAP_PREVIEW;
     var snapPvH = SNAP_PREVIEW;
@@ -6382,7 +4873,7 @@
     var bubbleColorOpenMenu = null;
     function visibleTopZ() {
       var top = 20500;
-      var cand = [bubbleMask, bubbleItemMask, moduleMask, usageMoreMask, qeditEl, window.__dshwRemindMask];
+      var cand = [bubbleMask, bubbleItemMask, moduleMask, qeditEl];
       function eff(el) {
         try {
           if (!el) return 0;
@@ -6412,10 +4903,8 @@
             document.head.removeChild(zsEl);
           } catch (err) {}
         }
-        if (!window.__dshwRemindMask) {
-          if (moduleMask && moduleMask.style.zIndex) moduleMask.style.zIndex = '';
-          if (qeditEl && qeditEl.style.zIndex) qeditEl.style.zIndex = '';
-        }
+        if (moduleMask && moduleMask.style.zIndex) moduleMask.style.zIndex = '';
+        if (qeditEl && qeditEl.style.zIndex) qeditEl.style.zIndex = '';
       } catch (err) {}
     }
     function dshwDropOpen(menuEl, anchorEl) {
@@ -8196,9 +6685,7 @@
     var bubbleCfg = null;
     var bubbleLib = [];
     function bubbleCloneModule(m) {
-      var copy = JSON.parse(JSON.stringify(m || ({})));
-      if (m && whaleMoneyTemplates.has(m)) whaleMoneyTemplates.set(copy, whaleMoneyTemplates.get(m));
-      return copy;
+      return JSON.parse(JSON.stringify(m || ({})));
     }
     function bubbleLibAdd(name, module) {
       try {
@@ -8721,20 +7208,13 @@
           preserveLineBreaks: firstSubscriptionQuota && mod.type === 'balance'
         };
       }
-      var reminder = whaleMoneyTemplates.get(mod);
-      function reminderText(template) {
-        return function () { return usageFillText(template, reminder.below, reminder.amount, reminder.currency); };
-      }
       if (mod.type === 'random' && Array.isArray(mod.lines)) {
         var pi = bubblePickLine(mod.lines, mod._lastPick);
         if (pi !== null && pi !== undefined && mod.lines[pi]) {
           mod._lastPick = pi;
-          var selectedText = mod.lines[pi].t;
-          var selectedMoney = reminder ? reminderText(selectedText) : null;
           return {
-            txt: selectedMoney ? selectedMoney() : selectedText,
-            line: mod.lines[pi],
-            moneyText: selectedMoney
+            txt: mod.lines[pi].t,
+            line: mod.lines[pi]
           };
         }
         return {
@@ -8742,8 +7222,7 @@
           line: null
         };
       }
-      var templateText = reminder ? reminderText(reminder.template) : null;
-      return { txt: templateText ? templateText() : mod.text || '', line: null, moneyText: templateText };
+      return { txt: mod.text || '', line: null };
     }
     function bubbleRowsTo(parentEl, mods, frozenRows) {
       if (!parentEl || !Array.isArray(mods)) return;
@@ -9167,10 +7646,26 @@
       }, bubbleScene.ttlMs || BUBBLE_MS, { firstSubscriptionQuota: firstSubscriptionQuota });
     }
     var quotaSnapshot = null, quotaAccount = null, quotaKey = '';
+    var quotaAlertSeq = Number(localStorage.getItem('dshw-quota-alert-seq') || 0), quotaAlertsAligned = false, quotaStartedAt = Date.now();
+    // A quota running low or a day's budget passed, as the quota book raised
+    // it: each shows once, as a system bubble. Ones raised before this page
+    // started are not shown again.
+    function showQuotaAlerts(alerts) {
+      (alerts || []).forEach(function (alert) {
+        if (!(alert.seq > quotaAlertSeq)) return;
+        quotaAlertSeq = alert.seq;
+        if (quotaAlertsAligned || alert.at >= quotaStartedAt) {
+          pushSystemBubble({ kind: 'alert', rank: 2, mods: [{ type: 'text', text: alert.title, size: 6, bold: true }, { type: 'text', text: alert.text, size: 5 }] });
+        }
+      });
+      quotaAlertsAligned = true;
+      try { localStorage.setItem('dshw-quota-alert-seq', String(quotaAlertSeq)); } catch (err) {}
+    }
     // Shows the quota book's current account: the state the bubbles read, the
     // title, and the snapshot for the view under the pet.
     function applyQuotas(snapshot) {
       quotaSnapshot = snapshot;
+      showQuotaAlerts(snapshot.alerts);
       var account = WhaleQuotaPresentation.current(snapshot);
       quotaAccount = account;
       window.dispatchEvent(new CustomEvent('whale-quotas', { detail: snapshot }));
@@ -9182,7 +7677,6 @@
       var note = account ? WhaleQuotaPresentation.status(account) : '';
       root.title = account ? WhaleQuotaPresentation.title(account) + (note ? ' · ' + note : '') : '额度';
       img.alt = WhaleQuotaPresentation.label(account);
-      if (account && account.type === 'api' && account.available) checkUsageAlerts(state.balance, state.todayUsage);
       refreshOpenNormalBubble();
     }
     function express() {
@@ -9555,7 +8049,6 @@
       if (menuOpen) positionMenu();
       menuBox.classList.toggle('dshwv-menu-open', menuOpen);
       if (menuOpen && !menuBtnHide) menuBtn.classList.add('dshwv-menu-btn-visible');
-      if (!menuOpen) closeUsagePanel();
     }
     function closeMenu() {
       menuOpen = false;
@@ -9564,7 +8057,6 @@
       menuBox.classList.remove('dshwv-menu-open');
       closeRolePanel();
       closeAudioGroupPanel();
-      closeUsagePanel();
       closeFxInfo();
       positioner.style.transition = '';
       snapCheck();
@@ -11516,9 +10008,8 @@
     loadBubbleCfg();
     if (window.whaleDesktop && window.whaleDesktop.testMode) {
       window.__whaleRenderTest = Object.freeze({
-        refresh: refresh, usage: refreshUsageMain, next: bubbleNext, close: hideBubble,
+        refresh: refresh, next: bubbleNext, close: hideBubble,
         poll: pollCompletions, importRole: onRoleFileChosen, importBubble: bubbleUploadImg,
-        openHistory: openUsageRecordsWindow,
         showCost: showCostBubble,
         open: whaleClick,
         queue: function (items) { hideBubble(); bubbleSeq = items; },
@@ -11618,10 +10109,7 @@
     window.addEventListener('whale-quotas-request', function () {
       if (quotaSnapshot) window.dispatchEvent(new CustomEvent('whale-quotas', { detail: quotaSnapshot }));
     });
-    window.addEventListener('whale-open-usage', function () {
-      if (!menuOpen) toggleMenu();
-      showUsageSub();
-    });
+    window.addEventListener('whale-open-usage', openQuotaRecords);
     function pollCompletions() {
       return usageClient.pollCompletions({
         codex: function (record) {

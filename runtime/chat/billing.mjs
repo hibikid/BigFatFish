@@ -115,4 +115,23 @@ export class ChatBilling {
     }
     return { today: totals.get(dayKey(now)) || 0, days: result };
   }
+  // The pet's requests on one account, newest first, each with its estimated
+  // amount in the account's currency; one still streaming is pending.
+  requests({ baseUrl, key, currency }) {
+    if (!officialDeepSeek(baseUrl) || !key) return [];
+    const scope = accountId(baseUrl, key);
+    return this.entries.filter(row => row.scope === scope).map(row => {
+      const amount = row.estimate?.amounts?.[currency];
+      const known = row.status !== 'streaming' && amount && Number.isFinite(amount.min) && Number.isFinite(amount.max);
+      const tokens = Number(row.usage?.total_tokens ?? (Number(row.usage?.prompt_tokens) || 0) + (Number(row.usage?.completion_tokens) || 0));
+      return { at: row.timestamp, model: row.model || '未知模型', tokens: Number.isFinite(tokens) && row.usage ? tokens : null, amount: known ? (amount.min + amount.max) / 2 : null,
+        currency, state: row.status === 'streaming' ? 'pending' : known ? 'estimated' : 'unknown', outcome: row.status || 'completed' };
+    }).sort((a, b) => b.at - a.at);
+  }
+  // Whether the pet used an account between two moments, as during a Codex turn.
+  usedBetween({ baseUrl, key }, from, to) {
+    if (!officialDeepSeek(baseUrl) || !key || !(from <= to)) return false;
+    const scope = accountId(baseUrl, key);
+    return this.entries.some(row => row.scope === scope && row.timestamp >= from && row.timestamp <= to);
+  }
 }

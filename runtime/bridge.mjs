@@ -9,7 +9,7 @@ export function pipeName(dataDir = DATA_HOME) {
   return process.platform === 'win32' ? '\\\\.\\pipe\\codex-whale-' + hash : path.join(dataDir, 'whale-' + hash + '.sock');
 }
 const ALLOWED = new Map([
-  ['/api/status', 'GET'], ['/api/quotas', 'GET'], ['/api/subscription-rate-limits', 'GET'], ['/api/claude/subscription', 'GET'], ['/api/claude/last-turn', 'GET'], ['/dsh-whale/balance.json', 'GET'], ['/dsh-whale/usage-records.json', 'GET'], ['/api/show', 'POST'], ['/api/stop', 'POST'],
+  ['/api/status', 'GET'], ['/api/quotas', 'GET'], ['/api/quota-records', 'GET'], ['/api/subscription-rate-limits', 'GET'], ['/api/claude/subscription', 'GET'], ['/api/claude/last-turn', 'GET'], ['/dsh-whale/balance.json', 'GET'], ['/dsh-whale/usage-records.json', 'GET'], ['/api/show', 'POST'], ['/api/stop', 'POST'],
 ]);
 
 export async function startBridge(dispatcher, { dataDir = DATA_HOME, onApprovalRequest = null } = {}) {

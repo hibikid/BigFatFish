@@ -42,6 +42,7 @@
 
 /* 额度管理 */
 .quota-manager-frame{padding:24px 26px}
+.quota-manager form:not(.quota-card){padding:0}
 .quota-manager .dialog-header{align-items:flex-start}
 .quota-manager .dialog-header > div{flex:1}
 .quota-currency{margin:0;font-size:11px;white-space:nowrap}
@@ -73,3 +74,28 @@
 .chat-account-state{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:6px;font-size:11px;color:#7b8f93}
 .chat-account-state button{padding:4px 10px;font-size:11px;border-radius:7px;flex:none}
 @media (max-width:560px){.quota-price-row{grid-template-columns:1fr 1fr}.quota-manager-frame{padding:18px}}
+.quota-tabs{display:flex;gap:4px;margin:-6px 0 6px;border-bottom:1px solid #e5eeeb}
+.quota-tabs button{padding:7px 14px;border:0;border-bottom:2px solid transparent;background:none;color:#7b8f93;font-size:13px}
+.quota-tabs button[aria-selected="true"]{color:#22676b;border-bottom-color:#22676b;font-weight:600}
+.quota-chart{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-top:10px}
+.quota-chart-day{display:flex;flex-direction:column;align-items:center;gap:4px}
+.quota-chart-track{position:relative;display:flex;align-items:flex-end;width:100%;height:56px;border-radius:5px;background:#eef4f3}
+.quota-chart-track.unknown{background:repeating-linear-gradient(135deg,#eef4f3 0 5px,#e2ebe9 5px 10px)}
+.quota-chart-bar{position:relative;width:100%;border-radius:5px;background:#3fb68b;overflow:hidden}
+.quota-chart-bar.estimated{background:#9fd4c0}
+.quota-chart-pet{position:absolute;left:0;right:0;bottom:0;background:#e0a32e}
+.quota-chart-label{font-size:10px;color:#7b8f93}
+.quota-events{margin-top:10px;padding-top:8px}
+.quota-events summary{font-size:12px}
+.quota-event{display:grid;grid-template-columns:76px 46px minmax(0,1fr) auto;gap:4px 10px;align-items:baseline;padding:6px 0;border-bottom:1px solid #edf3f1;font-size:12px;color:#466b70}
+.quota-event-time{color:#7b8f93;font-variant-numeric:tabular-nums}
+.quota-event-model{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.quota-event-amount{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.quota-event-tokens{grid-column:3/5;font-size:10px;color:#95a5a7}
+.quota-event-tokens:empty{display:none}
+.quota-fieldset{margin:14px 0 0;padding:10px 14px 14px;border:1px solid #d9e4e1;border-radius:10px}
+.quota-fieldset legend{padding:0 4px;font-size:13px;font-weight:600;color:#356a6c}
+.quota-fieldset .check{margin-top:6px;font-size:12px}
+.quota-amounts{display:flex;flex-wrap:wrap;gap:10px}
+.quota-amount{display:flex;align-items:center;gap:6px;margin:6px 0 0;font-size:13px}
+.quota-amount input{width:110px;margin:0}

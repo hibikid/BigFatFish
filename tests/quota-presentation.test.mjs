@@ -92,3 +92,7 @@ test('the current account becomes the state the pet\'s bubbles read', () => {
   assert.equal(presentation.bubbleState({ ...deepseek, balance: { unlimited: true, currency: 'CNY' } }).balance, Infinity);
   assert.equal(presentation.bubbleState(null).status, 'loading');
 });
+
+test('a page that shows today\'s spend apart leaves it out of the pace sentence', () => {
+  assert.equal(presentation.paceText(deepseek, { formatMoney: money, now, today: false }), '按近 7 天日均 ¥0.10，约可用 492 天');
+});

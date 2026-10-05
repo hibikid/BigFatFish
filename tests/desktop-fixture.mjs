@@ -446,6 +446,25 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await until("document.querySelector('.quota-overview').hidden", 'Escape did not close the overview');
     passed.push('a Claude reply makes Claude the account in use, opens a completion bubble, and click shows the latest Claude usage');
     passed.push('missing Claude quota reads as waiting, and the overview behind the meter lists every account and switches to the one chosen');
+    await js("window.dispatchEvent(new CustomEvent('whale-open-settings', { detail: { tab: 'records' } }))");
+    await until("document.getElementById('quota-manager').open && document.querySelector('[data-tab=records]').getAttribute('aria-selected') === 'true' && !!document.querySelector('.quota-chart')", 'the records page did not open');
+    assert.ok(await js("[...document.querySelectorAll('.quota-card')].some(card => card.textContent.includes('近 7 天') && card.textContent.includes('近 30 天'))"), 'records show the spend totals');
+    await capture('quota-records');
+    await js("document.querySelector('[data-tab=alerts]').click()");
+    await until("!!document.querySelector('.quota-alerts')", 'the reminders page did not open');
+    await js(`(() => { const form = document.querySelector('.quota-alerts'); form.elements.namedItem('windowPercent').value = '50'; form.elements.namedItem('turnCostSeconds').value = '7';
+      [...form.querySelectorAll('button')].find(button => button.textContent === '保存').click(); })()`);
+    await until("document.getElementById('toast').textContent === '提醒设置已保存'", 'reminder settings were not saved');
+    assert.equal(dispatcher.whale.readUsageSettings().quotaAlerts.windowPercent, 50);
+    assert.equal(await js("(() => { let state; addEventListener('whale-notice-settings-state', event => { state = event.detail; }, { once: true }); dispatchEvent(new Event('whale-notice-settings-request')); return state.turnCostCloseMs; })()"), 7000,
+      'the completion bubble time moved from the menu to the reminders page');
+    await capture('quota-alerts');
+    await js("document.querySelector('[data-quota-close]').click()");
+    await js('window.__whaleRenderTest.refresh(false)');
+    await until("window.__whaleRenderTest.status().scene === 'alert' && [...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('Codex 7d 额度不足'))", 'the quota reminder did not show');
+    await js('window.__whaleRenderTest.close()');
+    dispatcher.whale.writeUsageSettings({ quotaAlerts: { windowPercent: 20 } });
+    passed.push('额度管理 shows records with a seven-day chart and saves reminders, and the pet shows a quota reminder once');
     await click('.dshwv-img');
     await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('5小时剩余75%') && Number(getComputedStyle(el).opacity) > 0.99)", 'native subscription click did not become visible');
     await measureLayout('subscription-native-click');

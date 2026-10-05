@@ -9,7 +9,7 @@ async function request(url, method = 'GET', body) {
 }
 const manager = createQuotaManager({ dialog: document.getElementById('quota-manager'), request, money: window.WhaleMoney, presentation: window.WhaleQuotaPresentation,
   toast: message => window.whaleToast?.(message), onChanged: () => window.dispatchEvent(new Event('whale-quotas-changed')) });
-window.addEventListener('whale-open-settings', () => { void manager.open(); });
+window.addEventListener('whale-open-settings', event => { void manager.open({ tab: event.detail?.tab }); });
 
 // The widget fetches the quota book and announces each snapshot; this view
 // draws it under the pet. A choice made here goes straight to the book.

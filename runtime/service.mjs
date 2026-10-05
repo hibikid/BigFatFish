@@ -7,6 +7,7 @@ import { readJson, writeJson, rounded } from './paths.mjs';
 import { TurnJournal, safeSample, safeTurn, safeUsage } from './turn-journal.mjs';
 import { codexSnapshot, publicCodexSnapshot } from './quota/windows.mjs';
 import { AccountStore } from './quota/accounts.mjs';
+import { cleanAlertSettings, legacyAlertSettings } from './quota/alerts.mjs';
 
 function safeSubscriptionRateLimitContext(value) {
   const observedAt = Number(value?.observedAt);
@@ -36,6 +37,8 @@ export class WhaleService {
     this.recoveryError = '';
     // Told when a Codex turn ends, with the account it ran on; the quota book listens.
     this.onTurnEnd = options.onTurnEnd || (() => {});
+    // Whether the pet used an account during a turn, so a shared bill says so.
+    this.petUsedDuring = options.petUsedDuring || (() => false);
   }
   scope(c, currency) { return c.accountId + '-' + currency; }
   balanceIdentity(c) {
@@ -182,6 +185,11 @@ export class WhaleService {
     const defaults = usageDefaults();
     defaults.alert.lines.find(line => line.type === 'link').url = this.config.resolve().dashboardUrl;
     for (const key of Object.keys(defaults)) defaults[key] = { ...defaults[key], ...saved[key] };
+    // Quota reminders replaced the old balance warning and daily budget, which carry over.
+    let currency = 'USD';
+    try { currency = this.config.load().currency; } catch {}
+    try { defaults.quotaAlerts = saved.quotaAlerts ? cleanAlertSettings(saved.quotaAlerts) : saved.alert || saved.budget ? legacyAlertSettings(saved, currency) : cleanAlertSettings(); }
+    catch { defaults.quotaAlerts = cleanAlertSettings(); }
     return defaults;
   }
   writeUsageSettings(patch) {
@@ -189,6 +197,7 @@ export class WhaleService {
     const result = this.readUsageSettings();
     for (const key of Object.keys(result)) if (patch[key] && typeof patch[key] === 'object') result[key] = { ...result[key], ...patch[key] };
     for (const [key, field] of [['alert', 'below'], ['budget', 'amount']]) if (!Number.isFinite(Number(result[key][field])) || Number(result[key][field]) < 0) throw new Error('提醒阈值须为非负数字');
+    if (patch.quotaAlerts) result.quotaAlerts = cleanAlertSettings({ ...result.quotaAlerts, ...patch.quotaAlerts });
     writeJson(this.usageSettingsFile, result);
     return { ok: true, settings: result };
   }
@@ -332,6 +341,9 @@ export class WhaleService {
         note = costState === 'pending' ? '结束采样尚未出现可归属扣费，可能尚未入账或本次未计费；稍后的同密钥扣费不会直接归入本轮。' :
           '这是本轮运行期间同一 API 密钥的已观测合计扣费，可能含其他任务或设备的调用；并非逐请求最终账单。';
         note += (turn.partial ? ' 挂件在本轮开始后启动，仅覆盖启动后的时段。' : '') + (turn.concurrent ? ' 检测到同时运行的任务。' : '');
+        let shared = false;
+        try { shared = this.petUsedDuring(context, Date.parse(start.updatedAt), Date.parse(end.updatedAt)); } catch {}
+        if (shared) note += ' 期间大肥鱼也用这个账户说过话，那部分扣费也在里面。';
       }
     }
     if (meta.historical && amount === null) note = '已恢复任务状态及可用 token 记录；任务结束时没有可靠余额采样，不能把停机期间其他扣费归入本轮。';

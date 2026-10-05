@@ -79,8 +79,9 @@
     }
     return result;
   }
-  // One sentence on today's spend and how long the quota lasts at this rate.
-  function paceText(account, { formatMoney, now = Date.now() }) {
+  // One sentence on today's spend and how long the quota lasts at this rate;
+  // without today's spend where the page shows it apart.
+  function paceText(account, { formatMoney, now = Date.now(), today = true }) {
     if (account.type === 'subscription') {
       const paced = account.windows.filter(window => window.pace);
       const first = paced.filter(window => window.pace.exhaustAt).sort((a, b) => a.pace.exhaustAt - b.pace.exhaustAt)[0];
@@ -89,7 +90,7 @@
       return paced.length ? '按这个速度，重置前够用' : '';
     }
     const parts = [], spend = account.spend, average = spend && spend.average, pace = account.pace;
-    if (spend && finite(spend.today)) parts.push('今日 ' + formatMoney(spend.today, spend.currency));
+    if (today && spend && finite(spend.today)) parts.push('今日 ' + formatMoney(spend.today, spend.currency));
     if (average && average.amount === 0) parts.push('近 ' + average.days + ' 天没有消费');
     else if (average && pace) {
       const lead = '按近 ' + average.days + ' 天日均 ' + formatMoney(average.amount, average.currency);

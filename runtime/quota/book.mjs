@@ -3,6 +3,8 @@ import { dayKey, readJson, writeJson } from '../paths.mjs';
 import { claudeLastTurn, readClaudeSnapshot } from '../claude-usage.mjs';
 import { WINDOW_MINUTES, codexSnapshot, storedWindow } from './windows.mjs';
 import { balancePace, dailyAverage, limitPace, windowPace } from './pace.mjs';
+import { cleanAlertSettings, evaluateAlerts } from './alerts.mjs';
+import { apiRecords, subscriptionTurns } from './records.mjs';
 
 const STATE_FILE = 'quota-state.json';
 const ID = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -16,7 +18,10 @@ function readState(file) {
   const activity = {};
   for (const [id, at] of Object.entries(saved?.activity || {})) if (ID.test(id) && Number.isFinite(at) && at > 0) activity[id] = at;
   const pin = ID.test(saved?.pin?.id || '') && Number.isFinite(saved.pin.at) ? { id: saved.pin.id, at: saved.pin.at } : null;
-  return { activity, pin, seeded: saved?.seeded === true };
+  const fired = Object.fromEntries(Object.keys(saved?.fired || {}).filter(key => typeof key === 'string' && key.length < 200).map(key => [key, true]));
+  const alerts = (Array.isArray(saved?.alerts) ? saved.alerts : []).filter(alert => Number.isSafeInteger(alert?.seq) && Number.isFinite(alert.at) &&
+    typeof alert.title === 'string' && typeof alert.text === 'string').slice(-10);
+  return { activity, pin, seeded: saved?.seeded === true, fired, alerts, alertSeq: Number.isSafeInteger(saved?.alertSeq) ? saved.alertSeq : 0 };
 }
 
 // The full days before today, newest first, as ledger day keys.
@@ -58,7 +63,8 @@ const DASHBOARDS = { codex: 'https://chatgpt.com/codex/settings/usage', claude: 
 // The quota book: every account the pet knows, the Codex and Claude
 // subscriptions and the API accounts behind Codex providers and the pet, with
 // what is left, how fast it goes and which account is in use now. The pet only
-// renders what the book says. billing() is the pet's chat billing, once chat runs.
+// renders what the book says. billing() is the pet's chat billing once chat
+// runs; billing({ start: true }) starts chat for it.
 export class QuotaBook {
   constructor({ whale, billing = () => null, now = Date.now }) {
     this.whale = whale; this.billing = billing; this.now = now;
@@ -67,7 +73,7 @@ export class QuotaBook {
     Object.assign(this, readState(this.file));
   }
   save() {
-    try { writeJson(this.file, { version: 1, activity: this.activity, pin: this.pin, seeded: this.seeded }); } catch {}
+    try { writeJson(this.file, { version: 1, activity: this.activity, pin: this.pin, seeded: this.seeded, fired: this.fired, alertSeq: this.alertSeq, alerts: this.alerts }); } catch {}
   }
   // Every visible API account with what uses it: Codex providers, and the pet.
   // One whose key cannot be read is listed apart, with the reason.
@@ -77,7 +83,7 @@ export class QuotaBook {
       if (account.hidden) continue;
       const context = store.context(account);
       const uses = [...account.codexProviders.map(name => 'codex:' + name), ...(account.id === data.petAccountId ? ['pet'] : [])];
-      if (context.key) accounts.push({ id: account.id, context, name: account.name, uses });
+      if (context.key) accounts.push({ id: account.id, context, name: account.name, uses, ledgers: [account.ledgerId, ...account.legacyIds] });
       else broken.push({ id: account.id, name: account.name, host: new URL(account.endpoint).hostname, uses,
         error: KEY_PROBLEMS[context.keyStatus] || KEY_PROBLEMS['key-unavailable'] });
     }
@@ -202,7 +208,34 @@ export class QuotaBook {
       ...accounts.map(account => this.apiAccount(account, now)),
       ...broken.map(item => ({ id: item.id, type: 'api', provider: 'api', name: item.name, host: item.host || '', uses: item.uses, available: false,
         windows: [], balance: null, spend: null, pace: null, observedAt: null, stale: false, error: item.error, lastActiveAt: iso(this.activity[item.id]) }))];
-    return { ok: true, current: this.currentId(list), accounts: list };
+    this.raise(list, now);
+    return { ok: true, current: this.currentId(list), accounts: list, alerts: this.alerts };
+  }
+  // Raises the reminders that are new since the last look; the pet shows each once.
+  raise(list, now) {
+    let settings;
+    try { settings = cleanAlertSettings(this.whale.readUsageSettings().quotaAlerts); } catch { settings = cleanAlertSettings(); }
+    const { fired, raised } = evaluateAlerts({ accounts: list, settings, fired: this.fired, day: dayKey(now) });
+    const changed = raised.length > 0 || JSON.stringify(fired) !== JSON.stringify(this.fired);
+    this.fired = fired;
+    for (const alert of raised) this.alerts.push({ seq: ++this.alertSeq, at: now, accountId: alert.accountId, title: alert.title, text: alert.text });
+    this.alerts = this.alerts.slice(-10);
+    if (changed) this.save();
+  }
+  // The 记录 page: for each account, what it spent by day and its latest uses.
+  records() {
+    const now = this.now(), snapshot = this.snapshot(), { accounts } = this.apiAccounts();
+    return { ok: true, current: snapshot.current, accounts: snapshot.accounts.map(view => {
+      if (view.id === 'codex') return { id: view.id, turns: subscriptionTurns({ dataDir: this.dataDir, ledger: this.whale.ledger }) };
+      const account = accounts.find(item => item.id === view.id);
+      if (!account) return { id: view.id };
+      const result = this.balances.get(view.id), currency = result?.currency || account.context.setting.currency;
+      let requests = [];
+      if (account.uses.includes('pet')) {
+        try { requests = this.billing({ start: true })?.requests({ baseUrl: account.context.baseUrl, key: account.context.key, currency }) || []; } catch {}
+      }
+      return { id: view.id, ...apiRecords({ account, ledger: this.whale.ledger, result, requests, now }) };
+    }) };
   }
   // The account in use: the one with the latest activity, unless you chose
   // another since.
