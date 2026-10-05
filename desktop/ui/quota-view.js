@@ -27,9 +27,7 @@ export function createQuotaView({ root, pet, presentation, money, rendering, geo
   document.body.append(panel);
   const edges = new WeakMap();
   let snapshot = null, barsKey = '';
-  // Without an exchange rate an amount stays in its own currency rather than showing nothing.
-  const format = (amount, currency) => money.convert(amount, currency) === null ?
-    (currency === 'CNY' ? '¥' : currency === 'USD' ? '$' : currency + ' ') + amount.toFixed(2) : money.formatMoney(amount, currency);
+  const format = money.formatMoney;
 
   function meterRow(meter) {
     const row = element('div', 'dshwv-meter-row dshwv-meter-' + meter.level), track = element('div', 'dshwv-meter-track');

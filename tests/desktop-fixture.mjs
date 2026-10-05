@@ -60,7 +60,7 @@ export async function makeFixture(dataDir, { secretVault = null } = {}) {
     }, cancel() { clearTimeout(timer); } });
     return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
   };
-  return { service, claudeHome: path.join(dataDir, 'claude-home'), monitor: false, autoRefresh: false, chatFetchImpl, chatActivityOptions: { now: () => Date.now() + clockOffset }, fxFetchImpl: async () => Response.json({ date: new Date().toISOString().slice(0, 10), usd: { cny: 7 } }) };
+  return { service, claudeHome: path.join(dataDir, 'claude-home'), monitor: false, autoRefresh: false, chatFetchImpl, chatActivityOptions: { now: () => Date.now() + clockOffset }, fxFetchImpl: async () => Response.json({ amount: 1, base: 'USD', date: new Date().toISOString().slice(0, 10), rates: { CNY: 7 } }) };
 }
 
 function wav() {
@@ -89,7 +89,12 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
   }
   const status = () => js('window.__whaleRenderTest.status()');
   // A CNY amount as the page shows it: in the display currency once a rate is known, else as yuan.
-  const shown = amount => `(WhaleMoney.convert(${amount}, 'CNY') === null ? '¥' + (${amount}).toFixed(2) : WhaleMoney.formatMoney(${amount}, 'CNY'))`;
+  const shown = amount => `WhaleMoney.formatMoney(${amount}, 'CNY')`;
+  // Chooses how amounts show from 额度管理's title bar, as a person does.
+  async function showIn(currency) {
+    await js(`(() => { const select = document.querySelector('[data-quota-currency]'); select.value = ${JSON.stringify(currency)}; select.dispatchEvent(new Event('change')); })()`);
+    await until(`(WhaleMoney.state().displayCurrency || '') === ${JSON.stringify(currency)} && !document.querySelector('[data-quota-currency]').disabled`, 'the display currency did not change to ' + (currency || '原币种'));
+  }
   const saved = () => dispatcher.whale.readUsageSettings().approvalSound;
   const row = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('审批提醒音效'))";
   const timerRow = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('番茄钟提醒音效'))";
@@ -233,6 +238,19 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     const safe = dispatcher.book.snapshot().accounts.find(account => account.name === 'DeepSeek');
     assert.deepEqual([safe.balance.full, safe.balance.safe], [220, 220], 'the balance counts against the safe amount');
     passed.push('an API account\'s safe amount is set in its editor and counts as its full bar');
+    // A new currency or rate rewrites the amounts where they stand; a form being filled in keeps what was typed.
+    await js(`(() => { const card = [...document.querySelectorAll('.quota-card')].find(card => card.querySelector('strong')?.textContent === 'DeepSeek');
+      [...card.querySelectorAll('button')].find(button => button.textContent === '编辑').click(); })()`);
+    await until("!!document.querySelector('.quota-edit [name=name]')", 'the account editor did not reopen');
+    await js("document.querySelector('.quota-edit [name=name]').value = 'DeepSeek 未保存'");
+    await showIn('USD');
+    await until(`[...document.querySelectorAll('.quota-card')].some(card => card.querySelector('strong')?.textContent === 'DeepSeek' && card.textContent.includes('$${(110 / 7).toFixed(2)}'))`,
+      'the amounts did not follow the display currency');
+    await js("WhaleMoney.refreshQuote({ reason: 'timer' })");
+    assert.equal(await js("document.querySelector('.quota-edit [name=name]')?.value"), 'DeepSeek 未保存', 'a new currency or rate kept what was typed');
+    await js("[...document.querySelectorAll('.quota-edit button')].find(button => button.textContent === '取消').click()");
+    await showIn('');
+    passed.push('额度管理 rewrites its amounts for a new currency or rate in place, and a form being filled in keeps what was typed');
     await js("[...document.querySelectorAll('.quota-card[data-account-id=claude] button')].find(button => button.textContent === '接入 Claude Code').click()");
     await until("document.querySelector('.quota-card[data-account-id=claude]').textContent.includes('已接入 Claude Code')", 'connecting Claude Code did not show as connected');
     assert.match(fs.readFileSync(path.join(dataDir, 'claude-home', 'settings.json'), 'utf8'), /claude-statusline\.mjs/, 'Claude Code was connected in the test folder');
@@ -470,12 +488,15 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await capture('quota-records');
     await js("document.querySelector('[data-tab=alerts]').click()");
     await until("!!document.querySelector('.quota-alerts')", 'the reminders page did not open');
-    await js(`(() => { const form = document.querySelector('.quota-alerts'); form.elements.namedItem('windowPercent').value = '50'; form.elements.namedItem('turnCostSeconds').value = '7';
-      [...form.querySelectorAll('button')].find(button => button.textContent === '保存').click(); })()`);
+    await js("(() => { const form = document.querySelector('.quota-alerts'); form.elements.namedItem('windowPercent').value = '50'; form.elements.namedItem('turnCostSeconds').value = '7'; })()");
+    // Switching the display currency while reminders are being filled in keeps what was typed.
+    await showIn('CNY');
+    await js("[...document.querySelectorAll('.quota-alerts button')].find(button => button.textContent === '保存').click()");
     await until("document.getElementById('toast').textContent === '提醒设置已保存'", 'reminder settings were not saved');
     assert.equal(dispatcher.whale.readUsageSettings().quotaAlerts.windowPercent, 50);
     assert.equal(await js("(() => { let state; addEventListener('whale-notice-settings-state', event => { state = event.detail; }, { once: true }); dispatchEvent(new Event('whale-notice-settings-request')); return state.turnCostCloseMs; })()"), 7000,
       'the completion bubble time moved from the menu to the reminders page');
+    await showIn('');
     await capture('quota-alerts');
     await js("document.querySelector('[data-quota-close]').click()");
     await js('window.__whaleRenderTest.refresh(false)');

@@ -947,12 +947,13 @@
     });
     setInterval(updateFxButton, 1000);
     WhaleMoney.onChange(function (moneyState) {
-      currencySel.value = moneyState.preferredCurrency || '';
+      currencySel.value = moneyState.displayCurrency || '';
       currencyDrop.refresh();
       var fx = moneyState.quote;
       var latest = moneyState.latestQuote || fx;
       currencyNote.textContent = (fx ? '1 美元 = ' + fx.usdCny + ' 人民币\nFrankfurter · 汇率日期 ' + fx.date : '正在获取参考汇率…') +
         (latest && latest.stale ? ' · 离线缓存' : '') +
+        (!fx && moneyState.displayCurrency ? '\n还没有汇率，金额暂按各自的币种显示' : '') +
         '\n最近成功获取：' + fxTime(latest && latest.retrievedAt) +
         '\n最近检查：' + fxTime(moneyState.checkedAt) + '（北京时间）' +
         '\n每天 00:15 检查；休市日可能沿用上个交易日' +
@@ -968,10 +969,12 @@
     });
     currencySel.addEventListener('change', function () {
       var next = currencySel.value;
-      currencySel.value = WhaleMoney.state().preferredCurrency || '';
+      currencySel.value = WhaleMoney.state().displayCurrency || '';
       currencyDrop.refresh();
       closeFxInfo();
-      WhaleMoney.setDisplayCurrency(next || null).catch(function () {});
+      WhaleMoney.setDisplayCurrency(next || null).then(function (converted) {
+        if (!converted) assetNotice('还没有汇率，金额先按各自的币种显示，拿到汇率后自动换算');
+      }).catch(function (error) { assetNotice(error.message); });
     });
     menuBox.appendChild(menuSep1);
     menuBox.appendChild(row9);

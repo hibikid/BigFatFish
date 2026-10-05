@@ -12,10 +12,13 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
   const currency = dialog.querySelector('[data-quota-currency]'), tabs = dialog.querySelector('[data-quota-tabs]');
   let accounts = null, quotas = null, records = null, alertSettings = null, editing = '', adding = false, busy = false, tab = 'accounts';
 
+  // A text given as a function holds amounts: it follows the display currency
+  // where it stands, so a new currency or rate never redraws the page.
   const element = (tag, className, text) => {
     const node = document.createElement(tag);
     if (className) node.className = className;
-    if (text !== undefined) node.textContent = text;
+    if (typeof text === 'function') money.bind(node, text);
+    else if (text !== undefined) node.textContent = text;
     return node;
   };
   const button = (text, className, action) => {
@@ -41,7 +44,7 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
     for (const [option, label] of options) node.append(Object.assign(element('option', '', label), { value: option, selected: option === value }));
     return node;
   };
-  const format = (amount, unit) => money.convert(amount, unit) === null ? (unit === 'CNY' ? '¥' : unit === 'USD' ? '$' : unit + ' ') + amount.toFixed(2) : money.formatMoney(amount, unit);
+  const format = money.formatMoney;
   function showError(message) { error.textContent = message || ''; error.hidden = !message; }
   // One action at a time; its own message is the answer when it is refused.
   async function run(action, control) {
@@ -66,9 +69,12 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
   function quotaLines(view, { today = true } = {}) {
     if (!view) return [];
     const options = { formatMoney: format, now: Date.now(), today };
-    const lines = presentation.rows(view, options).map(row => row.label + ' ' + (/%$/.test(row.value) ? '剩余 ' : '') + row.value + (row.note ? ' · ' + row.note : ''));
-    const pace = presentation.paceText(view, options), status = presentation.status(view);
-    return [...lines, ...(pace ? [pace] : []), ...(status ? [status] : [])];
+    const texts = () => {
+      const lines = presentation.rows(view, options).map(row => row.label + ' ' + (/%$/.test(row.value) ? '剩余 ' : '') + row.value + (row.note ? ' · ' + row.note : ''));
+      const pace = presentation.paceText(view, options), status = presentation.status(view);
+      return [...lines, ...(pace ? [pace] : []), ...(status ? [status] : [])];
+    };
+    return texts().map((_, index) => line(() => texts()[index]));
   }
   function line(text, warn) { return element('p', 'quota-line' + (warn ? ' warn' : ''), text); }
   function quotaOf(id) { return quotas?.accounts.find(account => account.id === id) || null; }
@@ -97,10 +103,10 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
     }, monitor));
     const toggle = element('label', 'check');
     toggle.append(monitor, document.createTextNode('读取本机 Codex 会话记录（只读用量与额度，不读对话内容）'));
-    const codexLines = codex?.available ? quotaLines(codex).map(text => line(text)) : [line('还没有订阅额度：用 ChatGPT 登录的 Codex 运行一次后出现')];
+    const codexLines = codex?.available ? quotaLines(codex) : [line('还没有订阅额度：用 ChatGPT 登录的 Codex 运行一次后出现')];
     section.append(subscriptionCard('codex', codex ? presentation.title(codex) : 'Codex 订阅',
       [...codexLines, line(['来自本机 Codex 会话记录', updated(codex)].filter(Boolean).join(' · '))], [toggle]));
-    const claudeLines = claude?.available ? quotaLines(claude).map(text => line(text)) : [];
+    const claudeLines = claude?.available ? quotaLines(claude) : [];
     const connected = integration.installed ? '已接入 Claude Code' : integration.statusLine === 'other' ? 'Claude Code 已有别的状态栏命令，未接入' : '未接入 Claude Code';
     const action = integration.installed ? button('移除接入', 'quiet', async () => { await request('/api/claude/integration', 'POST', { action: 'uninstall' }); toast('已移除 Claude Code 接入'); await changed(); }) :
       button('接入 Claude Code', 'primary', async () => { await request('/api/claude/integration', 'POST', { action: 'install' }); toast('已接入，Claude Code 下次刷新状态栏时开始显示额度'); await changed(); });
@@ -189,7 +195,7 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
     const card = element('article', 'quota-card'), head = element('div', 'quota-card-head'), view = quotaOf(account.id);
     card.dataset.accountId = account.id;
     head.append(element('strong', '', account.name), element('span', 'quota-host', account.host), ...uses(account).map(tag => element('span', 'quota-tag', tag)));
-    card.append(head, ...quotaLines(view?.available || view?.error ? view : null).map(text => line(text)), keyLine(account));
+    card.append(head, ...quotaLines(view?.available || view?.error ? view : null), keyLine(account));
     if (account.keyStatus !== 'ready' && editing !== account.id) card.append(keyForm(account));
     if (editing === account.id) card.append(editForm(account));
     else {
@@ -251,11 +257,12 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
   function chart(days, unit, split) {
     const max = Math.max(0, ...days.map(day => day.total || 0)), box = element('div', 'quota-chart');
     box.setAttribute('role', 'img');
-    box.setAttribute('aria-label', '近 7 天每日消费：' + days.map(day => day.date.slice(5) + ' ' + (day.total === null ? '没有记录' : format(day.total, unit))).join('，'));
+    money.bind(box, () => '近 7 天每日消费：' + days.map(day => day.date.slice(5) + ' ' + (day.total === null ? '没有记录' : format(day.total, unit))).join('，'),
+      label => box.setAttribute('aria-label', label));
     for (const day of days) {
       const column = element('div', 'quota-chart-day'), track = element('div', 'quota-chart-track');
-      column.title = day.date.slice(5).replace('-', '/') + ' ' + (day.total === null ? '没有记录' : format(day.total, unit) + (day.estimated ? '（估算）' : '')) +
-        (split && Number.isFinite(day.pet) ? '，其中大肥鱼 ' + format(day.pet, unit) : '');
+      money.bind(column, () => day.date.slice(5).replace('-', '/') + ' ' + (day.total === null ? '没有记录' : format(day.total, unit) + (day.estimated ? '（估算）' : '')) +
+        (split && Number.isFinite(day.pet) ? '，其中大肥鱼 ' + format(day.pet, unit) : ''), title => { column.title = title; });
       if (day.total !== null && max > 0) {
         const bar = element('div', 'quota-chart-bar' + (day.estimated ? ' estimated' : ''));
         bar.style.height = Math.max(2, day.total / max * 100) + '%';
@@ -281,7 +288,7 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
     const details = element('details', 'quota-events');
     details.append(element('summary', '', '明细（最近 ' + events.length + ' 条）'));
     for (const event of events) {
-      const amount = Number.isFinite(event.amount) ? format(event.amount, event.currency) + (STATES[event.state] || '') : event.state === 'pending' ? '待记账' : '金额未知';
+      const amount = () => Number.isFinite(event.amount) ? format(event.amount, event.currency) + (STATES[event.state] || '') : event.state === 'pending' ? '待记账' : '金额未知';
       details.append(eventRow(stamp(event.at), event.kind === 'pet' ? '大肥鱼' : 'Codex', event.model + (OUTCOMES[event.outcome] ? ' · ' + OUTCOMES[event.outcome] : ''), amount, event.tokens));
     }
     return details;
@@ -296,12 +303,12 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
     return details;
   }
   function spendBlocks(record) {
-    const unit = record.currency, amount = value => Number.isFinite(value) ? format(value, unit) : '--';
+    const unit = record.currency, amount = value => format(value, unit);
     const blocks = [chart(record.days.slice(0, 7).reverse(), unit, record.split),
-      line('今日 ' + amount(record.today) + ' · 近 7 天 ' + amount(record.days7) + ' · 近 30 天 ' + amount(record.days30))];
+      line(() => '今日 ' + amount(record.today) + ' · 近 7 天 ' + amount(record.days7) + ' · 近 30 天 ' + amount(record.days30))];
     if (record.split) {
       const week = key => record.days.slice(0, 7).reduce((total, day) => total + (Number.isFinite(day[key]) ? day[key] : 0), 0);
-      blocks.push(line('近 7 天：Codex 任务 ' + format(week('codex'), unit) + ' · 大肥鱼 ' + format(week('pet'), unit)));
+      blocks.push(line(() => '近 7 天：Codex 任务 ' + amount(week('codex')) + ' · 大肥鱼 ' + amount(week('pet'))));
     }
     if (record.days.some(day => day.estimated)) blocks.push(line('没有账单记录的日子按大肥鱼的请求估算'));
     if (record.events.length) blocks.push(eventDetails(record.events));
@@ -316,7 +323,7 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
       card.dataset.accountId = view.id;
       head.append(element('strong', '', presentation.title(view)));
       if (view.id === quotas.current) head.append(element('span', 'quota-tag', '当前'));
-      card.append(head, ...quotaLines(view.available || view.error ? view : null, { today: !record.days }).map(text => line(text)));
+      card.append(head, ...quotaLines(view.available || view.error ? view : null, { today: !record.days }));
       if (record.days) card.append(...spendBlocks(record));
       if (record.turns?.length) card.append(turnDetails(record.turns));
       section.append(card);
@@ -395,11 +402,16 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
   });
 
   currency.addEventListener('change', () => run(async () => {
-    await money.setDisplayCurrency(currency.value || null);
-    render(); onChanged();
+    if (!await money.setDisplayCurrency(currency.value || null)) toast('还没有汇率，金额先按各自的币种显示，拿到汇率后自动换算');
   }, currency));
-  // A new display currency redraws the amounts, but never a form being filled in.
-  money.onChange(state => { currency.value = state.preferredCurrency || ''; if (dialog.open && tab !== 'alerts') render(); });
+  // A new currency or rate rewrites the amounts where they stand and redraws
+  // nothing, so a form being filled in keeps what was typed.
+  let written = '';
+  money.onChange(state => {
+    currency.value = state.displayCurrency || '';
+    const next = (state.displayCurrency || '') + ' ' + (state.quote?.usdCny ?? '');
+    if (next !== written) { written = next; money.refreshBindings(body); }
+  });
   dialog.querySelector('[data-quota-close]').addEventListener('click', () => dialog.close());
   return Object.freeze({
     async open({ tab: page = 'accounts' } = {}) {

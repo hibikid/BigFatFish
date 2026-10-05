@@ -8,6 +8,10 @@ import { billingUsage, estimateDeepSeek, officialDeepSeek } from '../runtime/cha
 import { createDispatcher } from '../runtime/dispatcher.mjs';
 import { createChatClient } from '../desktop/ui/chat-client.js';
 import { formatChatCost } from '../desktop/ui/chat-billing.js';
+import { browserModule } from './helpers/browser-module.mjs';
+
+// The page's money formatter, with no display currency chosen.
+globalThis.WhaleMoney = browserModule('money.js').createMoneyState({ loadQuote: async () => { throw new Error('offline'); } });
 
 const baseUrl = 'https://api.deepseek.com', key = 'synthetic-chat-key';
 const usage = { prompt_tokens: 1000, prompt_cache_hit_tokens: 200, prompt_cache_miss_tokens: 800, completion_tokens: 100, total_tokens: 1100 };

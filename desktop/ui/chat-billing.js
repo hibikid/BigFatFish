@@ -1,18 +1,10 @@
-const costDecimals = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-// Amounts follow the pet's display currency; without an exchange rate they stay in their own.
-function money(amount, currency) {
-  const display = globalThis.WhaleMoney;
-  if (display && display.convert(amount, currency) !== null) return display.formatMoney(amount, currency);
-  return (currency === 'USD' ? '$' : '¥') + costDecimals.format(amount);
-}
+// Amounts follow the pet's display currency where a rate converts them, else stay in their own.
+const money = (amount, currency) => globalThis.WhaleMoney.formatMoney(amount, currency);
 export function formatChatCost({ min, max, currency }) {
   return money((min + max) / 2, currency);
 }
 // Writes a text that is redrawn when the display currency changes.
-function show(element, text) {
-  const display = globalThis.WhaleMoney;
-  if (display) display.bind(element, text); else element.textContent = text();
-}
+const show = (element, text) => globalThis.WhaleMoney.bind(element, text);
 
 export function createChatBilling({ client, root }) {
   const spent = root.querySelector('[data-chat-spent]'), balance = root.querySelector('[data-chat-balance]');

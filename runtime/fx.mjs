@@ -83,7 +83,7 @@ export function createFxService({ dataDir, fetchImpl = fetch, now = Date.now, ti
     cooldownRemainingMs: remaining(lastManualAt, FX_POLICY.manualCooldownMs), retryAfterMs: backoff(),
     nextDailyCheckAt: new Date(nextDailyCheck(now())).toISOString() });
   function unavailable() {
-    const error = new Error('暂时无法取得 USD/CNY 汇率，已保留原显示币种，请稍后重试。');
+    const error = new Error('暂时无法取得 USD/CNY 汇率，换算不了的金额先按各自的币种显示，请稍后重试。');
     error.cooldownRemainingMs = remaining(lastManualAt, FX_POLICY.manualCooldownMs); error.retryAfterMs = backoff();
     error.checkedAt = checkedAt === null ? null : new Date(checkedAt).toISOString(); return error;
   }

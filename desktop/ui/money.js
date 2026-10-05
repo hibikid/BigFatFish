@@ -2,26 +2,25 @@
   'use strict';
   const DECIMALS = new Intl.NumberFormat('en-US', { useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const supported = value => value === 'USD' || value === 'CNY';
-  const normalized = value => String(value || 'USD').toUpperCase();
-  const symbolOf = currency => currency === 'USD' ? '$' : currency === 'CNY' ? '¥' : currency + ' ';
+  const symbolOf = currency => currency === 'USD' ? '$' : currency === 'CNY' ? '¥' : currency;
   const time = value => typeof value === 'string' ? Date.parse(value) : NaN;
   const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
     Number.isFinite(time(value + 'T00:00:00.000Z')) && new Date(value + 'T00:00:00.000Z').toISOString().slice(0, 10) === value;
 
   // Amounts show in one chosen currency, converted with a dated rate; with no
-  // choice, or while no rate is known, each amount shows in its own currency,
+  // choice, or where no rate converts an amount, it shows in its own currency,
   // so one account's currency never changes how another's amounts read.
   function createMoneyState({ loadQuote, readPreference = () => null, savePreference = () => {}, now = Date.now } = {}) {
     let saved;
     try { saved = readPreference(); } catch {}
-    let preferredCurrency = supported(saved) ? saved : null, nativeCurrency = 'USD', displayCurrency = null;
-    let quote = null, latestQuote = null, quoteJob = null, forceUpgrade = null, selection = 0, requestSerial = 0, error = '';
+    let displayCurrency = supported(saved) ? saved : null;
+    let quote = null, latestQuote = null, quoteJob = null, forceUpgrade = null, requestSerial = 0, error = '';
     let checkedAt = null, cooldownUntil = 0, retryUntil = 0;
     const listeners = new Set(), bindings = new Map();
     const snapshot = value => value && Object.freeze({ ...value });
     const pendingQuote = () => !!latestQuote && (!quote || latestQuote.usdCny !== quote.usdCny || latestQuote.date !== quote.date);
     function state() {
-      return Object.freeze({ nativeCurrency, displayCurrency, preferredCurrency, quote: snapshot(quote), latestQuote: snapshot(latestQuote),
+      return Object.freeze({ displayCurrency, quote: snapshot(quote), latestQuote: snapshot(latestQuote),
         hasPendingQuote: pendingQuote(), checkedAt, cooldownRemainingMs: Math.max(0, cooldownUntil - now()),
         retryAfterMs: Math.max(0, retryUntil - now()), refreshing: !!quoteJob || !!forceUpgrade,
         stale: !!latestQuote?.stale || !!error, error });
@@ -80,96 +79,61 @@
       }
       return startQuoteRequest({ force, reason });
     }
-    function chosenDisplay() {
-      return supported(preferredCurrency) && quote ? preferredCurrency : null;
-    }
     function applyLatestQuote({ refreshBindings: updateBindings = true } = {}) {
       if (latestQuote) quote = latestQuote;
-      displayCurrency = chosenDisplay();
       emit(updateBindings);
       return !!quote;
     }
     async function refreshQuote({ force = false, apply = false, reason = 'request' } = {}) {
       try {
         const value = await getQuote({ force, reason });
-        if (apply) applyLatestQuote();
-        else emit(false);
+        // The first rate is used as soon as it comes; a newer one waits until asked for.
+        if (apply || !quote) applyLatestQuote();
         return !value.stale;
       } catch {
         // A failed background/manual check never erases an already displayed rate.
-        if (!quote && apply) { displayCurrency = null; emit(); }
-        else emit(false);
         return false;
       }
     }
-    // An amount in the display currency; with none chosen, in its own.
-    function convert(amount, from = nativeCurrency, to = displayCurrency) {
-      from = normalized(from); to = to == null ? from : normalized(to);
-      const value = Number(amount);
-      if (amount == null || !Number.isFinite(value)) return null;
-      if (from === to) return value;
-      if (!supported(from) || !supported(to) || !quote) return null;
+    // An amount in the display currency, or null where no rate converts it.
+    function convert(value, from) {
+      if (!displayCurrency || from === displayCurrency) return value;
+      if (!supported(from) || !quote) return null;
       return from === 'USD' ? value * quote.usdCny : value / quote.usdCny;
     }
-    function symbol(from = nativeCurrency) { return symbolOf(displayCurrency || normalized(from)); }
-    function unit() { const currency = displayCurrency || nativeCurrency; return currency === 'USD' ? '美元' : currency === 'CNY' ? '人民币' : currency; }
-    function formatNumber(amount, from) {
-      const value = convert(amount, from);
-      return value === null ? '--' : DECIMALS.format(Object.is(value, -0) ? 0 : value);
-    }
-    function formatMoney(amount, from, space = false) {
+    // In the display currency where a rate converts it, else in its own; '--'
+    // when the amount or its currency is not known.
+    function formatMoney(amount, currency, space = false) {
       if (amount === Infinity) return '不限额';
-      if (amount == null) return '--';
-      return symbol(from) + (space ? ' ' : '') + formatNumber(amount, from);
-    }
-    function fromDisplay(amount, to = nativeCurrency) {
-      const value = convert(amount, displayCurrency || to, to);
-      if (value === null) throw new Error('汇率尚未就绪，无法保存换算金额');
-      return value;
+      const value = Number(amount), from = typeof currency === 'string' ? currency.toUpperCase() : '';
+      if (amount == null || !Number.isFinite(value) || !from) return '--';
+      const converted = convert(value, from), shown = converted === null ? value : converted;
+      const symbol = symbolOf(converted === null ? from : displayCurrency || from);
+      return symbol + (space || symbol.length > 1 ? ' ' : '') + DECIMALS.format(Object.is(shown, -0) ? 0 : shown);
     }
     function fresh(value) {
       const age = value ? now() - time(value.retrievedAt) : Infinity;
       return !!value && !value.stale && age >= 0 && age < 6 * 60 * 60 * 1000;
     }
-    // USD or CNY converts every amount; no currency shows each in its own.
+    // USD or CNY converts every amount a rate can convert; none shows each in
+    // its own. Resolves false only while this choice still waits for a first
+    // rate; until one comes, amounts show in their own currencies.
     async function setDisplayCurrency(currency) {
-      if (!currency) {
-        ++selection; preferredCurrency = null;
-        try { savePreference(''); } catch {}
-        displayCurrency = null; emit(); return true;
-      }
-      currency = normalized(currency);
-      if (!supported(currency)) throw new Error('显示换算目前支持 USD 和 CNY');
-      const id = ++selection;
-      preferredCurrency = currency;
-      try { savePreference(currency); } catch {}
-      const available = latestQuote || quote;
-      if (available) {
-        applyLatestQuote();
-        if (!fresh(available)) getQuote({ reason: 'currency' }).catch(() => {});
-        return true;
-      }
-      try {
-        await getQuote({ reason: 'currency' });
-        if (id !== selection) return false;
-        applyLatestQuote(); return true;
-      } catch (failure) {
-        if (id !== selection) return false;
-        displayCurrency = null; emit(); throw failure;
-      }
+      const next = currency ? String(currency).toUpperCase() : null;
+      if (next && !supported(next)) throw new Error('显示换算目前支持 USD 和 CNY');
+      displayCurrency = next;
+      try { savePreference(next || ''); } catch {}
+      applyLatestQuote();
+      if (!next) return true;
+      if (!quote) { await refreshQuote({ reason: 'currency' }); return !!quote || displayCurrency !== next; }
+      if (!fresh(quote)) getQuote({ reason: 'currency' }).catch(() => {});
+      return true;
     }
     async function ready() {
-      const id = selection;
       try {
         await getQuote({ reason: 'startup' });
-        if (id === selection) applyLatestQuote();
-        else emit(false);
-        return true;
-      } catch {
-        if (!quote && id === selection) { displayCurrency = null; emit(); }
-        else emit(false);
-        return false;
-      }
+        applyLatestQuote(); return true;
+      } catch { return false; }
     }
     function bind(element, read, write = value => { element.textContent = value; }) {
       bindings.set(element, { read, write }); write(read()); return () => bindings.delete(element);
@@ -179,7 +143,7 @@
     }
     function pruneBindings() { for (const element of bindings.keys()) if (!element.isConnected) bindings.delete(element); }
     function onChange(listener) { listeners.add(listener); listener(state()); return () => listeners.delete(listener); }
-    return Object.freeze({ state, convert, formatNumber, formatMoney, symbol, unit, fromDisplay, setDisplayCurrency,
+    return Object.freeze({ state, formatMoney, setDisplayCurrency,
       ready, refreshQuote, applyLatestQuote, bind, clearBindings, pruneBindings, refreshBindings, onChange });
   }
 
@@ -196,7 +160,7 @@
         const response = await fetch('/api/fx/usd-cny' + (query.length ? '?' + query.join('&') : ''), { cache: 'no-store' });
         const value = await response.json();
         if (!response.ok || !value.ok) {
-          const error = new Error(value.error || '汇率暂不可用，已保留原显示币种');
+          const error = new Error(value.error || '汇率暂不可用，换算不了的金额先按各自的币种显示');
           for (const key of ['checkedAt', 'cooldownRemainingMs', 'retryAfterMs']) if (value[key] !== undefined) error[key] = value[key];
           throw error;
         }
