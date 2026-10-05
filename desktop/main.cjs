@@ -90,13 +90,13 @@ function notifyApprovalRequest() {
   else pendingApprovalNotice = true;
 }
 async function showStatusDialog() {
-  let provider = {};
-  try { provider = dispatcher?.whale?.config?.publicInfo() || {}; } catch {}
+  let account = null;
+  try { const snapshot = dispatcher?.book?.snapshot(); account = snapshot?.accounts.find(item => item.id === snapshot.current) || null; } catch {}
   const lines = [
     '平台：' + process.platform,
     '挂件窗口：' + (window?.isVisible?.() ? '显示' : '隐藏'),
-    '服务商：' + (provider.providerName || '未配置'),
-    'API 地址：' + (provider.baseUrl || '未配置'),
+    '当前额度：' + (account ? account.name + (account.type === 'subscription' ? ' 订阅' : '') : '暂无'),
+    ...(account?.host ? ['API 地址：' + account.host] : []),
   ];
   await dialog.showMessageBox({
     type: 'info',
@@ -118,7 +118,7 @@ async function openWebLink(value, gestureRequired = true) {
   trustedGestureAt = 0;
   let target = value;
   if (value === 'whale://widget/provider-dashboard') {
-    try { target = dispatcher.whale.config.resolve().dashboardUrl; } catch { return false; }
+    try { target = dispatcher.book.dashboardUrl(); } catch { return false; }
   }
   const url = externalWebUrl(target);
   if (!url) return false;
@@ -148,8 +148,8 @@ else {
     const { createDispatcher, UI_ORIGIN } = await import(pathToFileURL(path.join(root, 'runtime', 'dispatcher.mjs')));
     const { startBridge } = await import(pathToFileURL(path.join(root, 'runtime', 'bridge.mjs')));
     let testOptions = {};
-    if (fixture) { const { makeFixture } = await import(pathToFileURL(path.join(root, 'tests', 'desktop-fixture.mjs'))); testOptions = await makeFixture(dataDir); }
     const secretVault = new KeychainVault({ dataDir, safeStorage });
+    if (fixture) { const { makeFixture } = await import(pathToFileURL(path.join(root, 'tests', 'desktop-fixture.mjs'))); testOptions = await makeFixture(dataDir, { secretVault }); }
     dispatcher = createDispatcher({ dataDir, secretVault, fetchImpl: (url, options) => net.fetch(url, options), onStop: pauseAndQuit, onShow: show,
       onChatNotice: notice => { if (notice.kind === 'pomodoro') show(); },
       // Present: a key or mouse event in the last 15 minutes and the screen not locked.
@@ -246,15 +246,15 @@ else {
     if (isMac) {
       trayTemplate.push({ label: '命令', submenu: [
         { label: chatShortcutAvailable ? '打开会话（Ctrl+0）' : '打开会话（Ctrl+0 被占用）', click: openChatShortcut },
-        { label: '刷新余额', accelerator: 'Command+R', click: () => sendCommand('balance') },
+        { label: '刷新额度', accelerator: 'Command+R', click: () => sendCommand('balance') },
         { label: '查看用量记录', click: () => sendCommand('usage') },
         { label: '查看运行状态', click: () => { void showStatusDialog(); } },
         { type: 'separator' },
-        { label: 'API 设置', click: () => sendCommand('settings') },
+        { label: '额度管理', click: () => sendCommand('settings') },
         { label: '停止当前挂件', click: pauseAndQuit },
       ] });
     } else {
-      trayTemplate.push({ label: 'API 设置', click: () => { show(); window.webContents.send('whale-settings'); } });
+      trayTemplate.push({ label: '额度管理', click: () => { show(); window.webContents.send('whale-settings'); } });
     }
     trayTemplate.push({ type: 'separator' }, { label: '停止挂件（可从启动命令恢复）', click: pauseAndQuit });
     tray.setContextMenu(Menu.buildFromTemplate(trayTemplate));

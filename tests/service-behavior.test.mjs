@@ -24,7 +24,7 @@ test('main and late child turns aggregate once and stay isolated across sources'
   assert.equal(records.overall.all.tokens, 420);
   assert.equal(records.overall.all.turns, 2);
   assert.deepEqual(records.overall.all.amounts, [{ currency: 'USD', total: 0.49 }]);
-  assert.equal(records.overall.sources.find(source => source.id === 'work').all.tokens, 180);
+  assert.equal(records.overall.sources.find(source => source.name === 'Work').all.tokens, 180);
   assert.equal(records.all.events.length, 1);
 });
 

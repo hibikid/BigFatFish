@@ -1027,7 +1027,7 @@
     var apiSettingsBtn = document.createElement('button');
     apiSettingsBtn.type = 'button';
     apiSettingsBtn.className = 'dshwv-api-open';
-    apiSettingsBtn.textContent = 'API 设置';
+    apiSettingsBtn.textContent = '额度管理';
     apiSettingsBtn.style.cssText = 'width:100%;margin:6px 0;padding:7px;border:1px solid #badbdc;border-radius:8px;background:#eff9f8;color:#22676b;cursor:pointer';
     apiSettingsBtn.addEventListener('click', function (e) {
       e.stopPropagation();
@@ -1062,7 +1062,7 @@
       menuBox.appendChild(button);
       return button;
     }
-    appendCommandButton('刷新余额', function () { refresh(true); });
+    appendCommandButton('刷新额度', function () { refresh(true); });
     appendCommandButton('查看用量记录', function () {
       if (!menuOpen) toggleMenu();
       showUsageSub();

@@ -37,16 +37,18 @@ try {
   assert.deepEqual(usage.rateLimits, [{ limit: 100, remaining: 75, resetsAt: '2026-09-25T00:00:00Z' }]);
   assert.deepEqual(usage.primaryRateLimit, { limit: 100, remaining: 75, resetsAt: '2026-09-25T00:00:00Z', used: 25 });
 
-  let displayedSource = '';
+  let displayed = null;
   const service = new WhaleService({ config: store, provider: { balance: async context => {
-    displayedSource = context.sourceId;
+    displayed = context;
     return { ok: true, accountId: context.accountId, providerName: context.providerName, baseUrl: context.baseUrl,
       totalBalance: null, totalUsed: 1.25, sourceDailyUsage: 1.25, currency: 'USD', adapter: 'source-usage',
       primaryRateLimit: { limit: 100, remaining: 75, used: 25, resetsAt: '2026-09-25T00:00:00Z' } };
   } } });
   service.beginTurn({ id: 'work-session:work-turn', sessionId: 'work-session', turnId: 'work-turn', modelProvider: 'work', isSubagent: false, ts: Date.now(), byModel: {} });
   const display = await service.getBalance();
-  assert.equal(displayedSource, 'work');
+  assert.equal(displayed.sourceName, '工作中转站', 'the old source became an account and the pet shows it');
+  assert.equal(displayed.queryUrl, 'https://example.test/v1/usage');
+  assert.deepEqual(displayed.requestHeaders, { 'x-provider-context': 'desktop-client' }, 'the account still sends the TOML headers');
   assert.equal(display.todayUsage, 1.25);
   assert.equal(display.todayUsageSource, 'source-api');
   assert.deepEqual(display.primaryRateLimit, { limit: 100, remaining: 75, used: 25, resetsAt: '2026-09-25T00:00:00Z' });

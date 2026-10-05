@@ -13,7 +13,7 @@ export const DEFAULT_CONFIG = {
   models: {}, sources: [],
 };
 
-function cleanUrl(value, { allowEmpty = false } = {}) {
+export function cleanUrl(value, { allowEmpty = false } = {}) {
   if (!value && allowEmpty) return '';
   let u;
   try { u = new URL(value); } catch { throw new Error('API 地址无效'); }
@@ -67,7 +67,7 @@ function sourceQueryUrl(value) {
   return cleanUrl(String(value));
 }
 
-function sourceHeaders(value) {
+export function sourceHeaders(value) {
   if (value === undefined || value === null) return {};
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length > 30) throw new Error('数据源 TOML 的 http_headers 无效');
   const headers = {};

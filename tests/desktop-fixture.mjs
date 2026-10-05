@@ -9,11 +9,11 @@ import { bridgeRequest } from '../runtime/bridge.mjs';
 
 let clockOffset = 0;
 
-export async function makeFixture(dataDir) {
+export async function makeFixture(dataDir, { secretVault = null } = {}) {
   const codexHome = process.env.CODEX_HOME;
   assert.ok(codexHome && process.env.WHALE_HOME === dataDir, 'isolated directories are required');
   fs.writeFileSync(path.join(codexHome, 'config.toml'), 'model_provider = "fixture"\n[model_providers.fixture]\nbase_url = "https://fixture.example.test/v1"\nenv_key = "FIXTURE_KEY"\n');
-  const config = new ConfigStore({ dataDir, codexHome, env: { FIXTURE_KEY: 'synthetic-test-key' } });
+  const config = new ConfigStore({ dataDir, codexHome, env: { FIXTURE_KEY: 'synthetic-test-key' }, secretVault });
   config.save({ provider: 'custom-json', balancePath: '/balance', balanceField: 'balance', monitorSessions: false });
   let completedChatCalls = 0;
   // Balances, the pet's included, are read through the quota book's service.
@@ -60,7 +60,7 @@ export async function makeFixture(dataDir) {
     }, cancel() { clearTimeout(timer); } });
     return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
   };
-  return { service, monitor: false, autoRefresh: false, chatFetchImpl, chatActivityOptions: { now: () => Date.now() + clockOffset }, fxFetchImpl: async () => Response.json({ date: new Date().toISOString().slice(0, 10), usd: { cny: 7 } }) };
+  return { service, claudeHome: path.join(dataDir, 'claude-home'), monitor: false, autoRefresh: false, chatFetchImpl, chatActivityOptions: { now: () => Date.now() + clockOffset }, fxFetchImpl: async () => Response.json({ date: new Date().toISOString().slice(0, 10), usd: { cny: 7 } }) };
 }
 
 function wav() {
@@ -213,7 +213,28 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await js("document.getElementById('chat-open-settings').click()");
     await until("document.getElementById('chat-settings').open", 'chat settings did not open');
     assert.equal(await js("document.getElementById('chat-settings-form').elements.namedItem('backgroundMaxTokens').value"), '1024', 'proactive reply length should show its default');
-    await js(`(() => { const form = document.getElementById('chat-settings-form'); const values = { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: 'synthetic-chat-key', persona: 'You are a whale.', maxTokens: 1024 }; for (const [key, value] of Object.entries(values)) form.elements.namedItem(key).value = value; form.requestSubmit(); })()`);
+    // Keys live in 额度管理: add the pet's DeepSeek account there, then choose it for chat.
+    await js("document.getElementById('chat-manage-accounts').click()");
+    await until("document.getElementById('quota-manager').open && !document.getElementById('chat-settings').open && !!document.querySelector('.quota-add-button')", 'chat settings did not open the quota manager');
+    await js("document.querySelector('.quota-add-button').click()");
+    await until("!!document.querySelector('.quota-add')", 'the add-account form did not open');
+    await js(`(() => { const form = document.querySelector('.quota-add'); const values = { name: 'DeepSeek', endpoint: 'https://api.deepseek.com', key: 'synthetic-chat-key' };
+      for (const [name, value] of Object.entries(values)) form.querySelector('[name=' + name + ']').value = value;
+      [...form.querySelectorAll('button')].find(button => button.textContent === '保存并查询').click(); })()`);
+    await until("[...document.querySelectorAll('.quota-card')].some(card => card.textContent.includes('DeepSeek') && card.textContent.includes('密钥已存入钥匙串') && card.textContent.includes('余额'))", 'the added account did not show its balance');
+    assert.ok(!(await js("document.getElementById('quota-manager').innerHTML")).includes('synthetic-chat-key'), 'the manager never shows a key');
+    await js("[...document.querySelectorAll('.quota-card[data-account-id=claude] button')].find(button => button.textContent === '接入 Claude Code').click()");
+    await until("document.querySelector('.quota-card[data-account-id=claude]').textContent.includes('已接入 Claude Code')", 'connecting Claude Code did not show as connected');
+    assert.match(fs.readFileSync(path.join(dataDir, 'claude-home', 'settings.json'), 'utf8'), /claude-statusline\.mjs/, 'Claude Code was connected in the test folder');
+    await capture('quota-manager');
+    passed.push('额度管理 adds an account with its key kept in the keychain, shows its balance, and connects Claude Code');
+    await js("document.querySelector('[data-quota-close]').click()");
+    await js("document.getElementById('chat-open-settings').click()");
+    await until("document.getElementById('chat-settings').open && [...document.querySelector('[name=accountId]').options].some(option => option.textContent.startsWith('DeepSeek'))", 'the new account is not offered for chat');
+    await js(`(() => { const form = document.getElementById('chat-settings-form'), picker = form.elements.namedItem('accountId');
+      picker.value = [...picker.options].find(option => option.textContent.startsWith('DeepSeek')).value;
+      for (const [key, value] of Object.entries({ model: 'deepseek-flash', persona: 'You are a whale.', maxTokens: 1024 })) form.elements.namedItem(key).value = value;
+      form.requestSubmit(); })()`);
     await until("!document.getElementById('chat-settings').open", 'chat settings did not save');
     await click('#chat-input');
     await until("document.activeElement === document.getElementById('chat-input')", 'chat input did not regain focus after settings');

@@ -6,6 +6,7 @@ import { UsageLedger, usageDefaults } from './ledger.mjs';
 import { readJson, writeJson, rounded } from './paths.mjs';
 import { TurnJournal, safeSample, safeTurn, safeUsage } from './turn-journal.mjs';
 import { codexSnapshot, publicCodexSnapshot } from './quota/windows.mjs';
+import { AccountStore } from './quota/accounts.mjs';
 
 function safeSubscriptionRateLimitContext(value) {
   const observedAt = Number(value?.observedAt);
@@ -16,6 +17,7 @@ function safeSubscriptionRateLimitContext(value) {
 export class WhaleService {
   constructor(options = {}) {
     this.config = options.config || new ConfigStore(options);
+    this.accounts = options.accounts || new AccountStore({ config: this.config });
     this.provider = options.provider || new BalanceProvider(options);
     this.ledger = new UsageLedger(this.config.dataDir);
     this.cache = new Map(); this.inFlight = new Map(); this.turns = new Map(); this.settling = new Set();
@@ -50,11 +52,19 @@ export class WhaleService {
     }
     if (sourceId && sourceId !== 'default') {
       try {
-        const entry = this.config.configuredSources().find(item => item.context?.sourceId === sourceId);
-        if (entry?.context) return entry.context;
+        const context = this.accounts.contextFor(sourceId);
+        if (context) return context;
       } catch {}
     }
     return this.config.resolve();
+  }
+  // The account a Codex session ran on, by its provider name (a log without
+  // one ran on the default provider); a session on no account, such as one on
+  // the ChatGPT subscription, uses the default config.
+  resolveForSession(meta = {}) {
+    let provider = typeof meta.modelProvider === 'string' ? meta.modelProvider : '';
+    if (!provider) { try { provider = this.config.resolve().sessionProvider; } catch {} }
+    return this.accounts.sessionContext(provider) || this.config.resolve();
   }
   isDisplayBalanceContext(c) {
     try { return this.balanceIdentity(c) === this.balanceIdentity(this.displayContext()); }
@@ -165,7 +175,7 @@ export class WhaleService {
     const c = this.displayContext();
     const scope = this.activeScope?.startsWith(c.accountId + '-') ? this.activeScope : this.scope(c, c.setting.currency);
     return { ...this.ledger.records(scope), currency: scope.slice(-3), settings: this.readUsageSettings(),
-      overall: this.ledger.recordsAll(this.config.sourcePublicInfo(c.setting)) };
+      overall: this.ledger.recordsAll(this.accounts.sourceNames()) };
   }
   readUsageSettings() {
     const saved = readJson(this.usageSettingsFile, {});
@@ -189,7 +199,7 @@ export class WhaleService {
     if (this.closed || this.settling.has(meta.id)) return;
     if (this.turns.has(meta.id)) { this.updateTurn(meta); return; }
     let context;
-    try { context = this.config.resolveForSession(meta); } catch { return; }
+    try { context = this.resolveForSession(meta); } catch { return; }
     if (!meta.isSubagent) {
       this.displaySourceId = context.sourceId || 'default';
       const session = meta.sessionId || meta.id;
@@ -235,7 +245,7 @@ export class WhaleService {
     for (const saved of this.journal.list()) {
       let source;
       try {
-        source = saved.sourceId && saved.sourceId !== 'default' ? this.config.configuredSources().find(item => item.context?.sourceId === saved.sourceId)?.context : current;
+        source = saved.sourceId && saved.sourceId !== 'default' ? this.accounts.contextFor(saved.sourceId) : current;
       } catch {}
       const matches = source?.accountId === saved.accountId && source.setting.currency === saved.currency;
       const context = matches ? { ...source, setting: { ...source.setting, models: saved.pricing } } :

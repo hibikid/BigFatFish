@@ -101,18 +101,29 @@ async function openSettings() {
   busySettings = true;
   try {
     const [result, activity] = await Promise.all([client.settings(), client.activitySettings()]); settings = result.settings;
-    for (const name of ['baseUrl', 'model', 'persona', 'maxTokens', 'backgroundMaxTokens']) field(name).value = settings[name];
-    field('apiKey').value = '';
-    field('apiKey').placeholder = settings.hasKey ? '已保存，留空保留' : '';
+    showAccounts();
+    for (const name of ['model', 'persona', 'maxTokens', 'backgroundMaxTokens']) field(name).value = settings[name];
     field('proactiveEnabled').checked = activity.settings.enabled;
     for (const [name, value] of [['proactiveStart', activity.settings.start], ['proactiveEnd', activity.settings.end],
       ['proactiveMin', activity.settings.minMinutes], ['proactiveMax', activity.settings.maxMinutes], ['proactiveLimit', activity.settings.dailyLimit]]) field(name).value = value;
-    $('chat-key-state').textContent = settings.keyStorage === 'encrypted' ? '密钥使用本机加密存储' : '此环境的密钥仅在本次运行期间保留';
     $('chat-settings-error').hidden = true;
     if (!settingsDialog.open) settingsDialog.showModal();
-    field(settings.baseUrl ? 'persona' : 'baseUrl').focus();
+    field(settings.accountId ? 'persona' : 'accountId').focus();
   } catch (error) { window.whaleToast(errorText(error)); }
   finally { busySettings = false; }
+}
+// The accounts the pet can talk through; keys are kept in 额度管理.
+function showAccounts() {
+  const picker = field('accountId');
+  picker.replaceChildren(...settings.accounts.map(account => Object.assign(document.createElement('option'),
+    { value: account.id, textContent: account.name + ' · ' + account.host + (account.ready ? '' : '（缺少密钥）'), selected: account.id === settings.accountId })));
+  if (!settings.accounts.length) picker.append(Object.assign(document.createElement('option'), { value: '', textContent: '还没有账户，请先在额度管理里添加', disabled: true, selected: true }));
+  showKeyState();
+}
+function showKeyState() {
+  const account = settings?.accounts.find(item => item.id === field('accountId').value);
+  $('chat-key-state').textContent = !account ? '请选择大肥鱼说话用的账户' : !account.ready ? '这个账户还没有可用的密钥，请在额度管理里填写' :
+    account.id === settings.accountId && settings.keyStorage === 'session' ? '密钥只保留到挂件退出' : '密钥保存在额度管理里，存于本机钥匙串';
 }
 async function send() {
   if (active || !loaded || busyConversations || !input.value.trim()) return;
@@ -184,13 +195,15 @@ form.addEventListener('submit', async event => {
       minMinutes: Number(values.proactiveMin), maxMinutes: Number(values.proactiveMax), dailyLimit: Number(values.proactiveLimit) };
     const result = await client.save(values);
     await client.saveActivitySettings(activity);
-    settings = result.settings; field('apiKey').value = ''; settingsDialog.close();
+    settings = result.settings; settingsDialog.close();
     billing.reset(); void billing.refresh({ force: true });
     setStatus(''); window.whaleToast('会话设置已保存');
   } catch (error) { $('chat-settings-error').textContent = errorText(error); $('chat-settings-error').hidden = false; }
   finally { busySettings = false; $('chat-settings-save').disabled = false; }
 });
-settingsDialog.addEventListener('close', () => { field('apiKey').value = ''; if (!composer.hidden) input.focus(); });
+settingsDialog.addEventListener('close', () => { if (!composer.hidden) input.focus(); });
+field('accountId').addEventListener('change', showKeyState);
+$('chat-manage-accounts').addEventListener('click', () => { settingsDialog.close(); window.dispatchEvent(new Event('whale-open-settings')); });
 $('chat-settings-close').addEventListener('click', () => settingsDialog.close());
 $('chat-settings-cancel').addEventListener('click', () => settingsDialog.close());
 $('chat-open-settings').addEventListener('click', openSettings);

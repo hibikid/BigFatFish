@@ -22,7 +22,7 @@ const reply = text => new Response('data: ' + JSON.stringify({ choices: [{ delta
 
 // Codex runs on DeepSeek with the key the pet also uses, and on a relay through
 // a second config whose query link reports daily cost and a weekly key limit.
-function setup(t, { pet: petOptions = {} } = {}) {
+function setup(t, { billing = () => null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-quota-book-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const codexHome = path.join(root, 'codex'), dataDir = path.join(root, 'data');
@@ -43,8 +43,9 @@ function setup(t, { pet: petOptions = {} } = {}) {
   };
   const whale = new WhaleService({ config, fetchImpl });
   t.after(() => whale.close());
-  const pet = { baseUrl: 'https://api.deepseek.com', key: petKey, model: 'deepseek-flash', ...petOptions };
-  return { dataDir, config, whale, calls, now, book: new QuotaBook({ whale, pet: () => pet }) };
+  // The pet talks to DeepSeek with the key Codex also uses there.
+  whale.accounts.setPet(whale.accounts.adopt({ baseUrl: 'https://api.deepseek.com', key: petKey }).id);
+  return { dataDir, config, whale, calls, now, book: new QuotaBook({ whale, billing }) };
 }
 
 test('each subscription window expires on its own', () => {
@@ -105,7 +106,7 @@ test('a subscription shows each valid window with its pace, and marks one that r
 test('the pet account falls back on chat billing estimates for days its ledger never saw', async t => {
   const now = Date.now();
   const billing = { dailySpend: () => ({ today: 0.5, days: [{ date: dayKey(now - DAY), total: 1 }, { date: dayKey(now - 2 * DAY), total: 0.6 }] }) };
-  const { book } = setup(t, { pet: { billing } });
+  const { book } = setup(t, { billing: () => billing });
   await book.refresh();
   const pet = book.snapshot().accounts.find(account => account.uses.includes('pet'));
   assert.deepEqual(pet.spend.average, { amount: 0.8, days: 2, currency: 'CNY' });
@@ -117,7 +118,7 @@ test('the account in use follows the latest activity, and a choice holds until a
   const { book, whale, dataDir, now } = setup(t);
   await book.refresh();
   const ids = Object.fromEntries(book.snapshot().accounts.map(account => [account.uses.includes('pet') ? 'pet' : account.name, account.id]));
-  const relay = whale.config.configuredSources()[0].context;
+  const relay = whale.accounts.sessionContext('relay');
   book.codexTurn({ ts: now - 5000, subscription: true });
   assert.equal(book.snapshot().current, 'codex');
   saveClaudeTurn(dataDir, { hook_event_name: 'Stop', session_id: 'fixture' }, now - 4000);
@@ -131,7 +132,7 @@ test('the account in use follows the latest activity, and a choice holds until a
   assert.equal(book.snapshot().current, 'codex');
   book.codexTurn({ ts: now - 1500, subscription: false, context: relay });
   assert.equal(book.snapshot().current, 'codex', 'activity from before the choice does not move it');
-  assert.equal(new QuotaBook({ whale, pet: () => null }).snapshot().current, 'codex', 'the choice survives a restart');
+  assert.equal(new QuotaBook({ whale }).snapshot().current, 'codex', 'the choice survives a restart');
   book.petMessage(now);
   assert.equal(book.snapshot().current, ids.pet, 'a later activity moves the pet on');
   assert.throws(() => book.select('missing'), /没有这个额度账户/);
@@ -139,7 +140,7 @@ test('the account in use follows the latest activity, and a choice holds until a
 
 test('a Codex turn is activity on the subscription it used, or on the API account it ran against', async t => {
   const { service } = fixture(t), ends = [], now = Date.now();
-  service.onTurnEnd = event => ends.push({ subscription: event.subscription, source: event.context.sourceId });
+  service.onTurnEnd = event => ends.push({ subscription: event.subscription, source: event.context.sourceName });
   const limits = { observedAt: now, planType: 'plus', fiveHour: { usedPercent: 25, windowMinutes: 300, resetsAt: now + HOUR },
     sevenDay: { usedPercent: 60, windowMinutes: 10080, resetsAt: now + DAY } };
   service.beginTurn(turn('work_turn', { provider: 'work' }));
@@ -148,7 +149,7 @@ test('a Codex turn is activity on the subscription it used, or on the API accoun
   await service.finishTurn(turn('plan_turn', { outcome: 'completed', subscriptionRateLimits: limits }));
   service.beginTurn(turn('old_turn'));
   await service.finishTurn(turn('old_turn', { outcome: 'completed', historical: true }));
-  assert.deepEqual(ends, [{ subscription: false, source: 'work' }, { subscription: true, source: 'default' }], 'a recovered old turn is not new activity');
+  assert.deepEqual(ends, [{ subscription: false, source: 'Work' }, { subscription: true, source: 'personal' }], 'a recovered old turn is not new activity');
 });
 
 test('chat billing reads the pet account balance through the book', async t => {

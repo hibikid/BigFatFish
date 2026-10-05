@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { dayKey, readJson, writeJson } from '../paths.mjs';
-import { apiFingerprint as accountId } from '../quota/book.mjs';
+import { apiFingerprint as accountId } from '../quota/accounts.mjs';
 import { billingUsage, estimateDeepSeek, officialDeepSeek } from './deepseek-pricing.mjs';
 
 const WINDOW_MS = 30 * 24 * 60 * 60 * 1000;

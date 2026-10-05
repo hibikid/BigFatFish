@@ -1,9 +1,6 @@
 import path from 'node:path';
-import { createHash } from 'node:crypto';
-import { DEFAULT_CONFIG } from '../config.mjs';
 import { dayKey, readJson, writeJson } from '../paths.mjs';
 import { claudeLastTurn, readClaudeSnapshot } from '../claude-usage.mjs';
-import { officialDeepSeek } from '../chat/deepseek-pricing.mjs';
 import { WINDOW_MINUTES, codexSnapshot, storedWindow } from './windows.mjs';
 import { balancePace, dailyAverage, limitPace, windowPace } from './pace.mjs';
 
@@ -12,10 +9,6 @@ const ID = /^[a-z][a-z0-9_-]{0,63}$/;
 const iso = at => Number.isFinite(at) ? new Date(at).toISOString() : null;
 const KEY_PROBLEMS = { 'keychain-missing': '钥匙串里没有这个账户的密钥', 'keychain-unavailable': '钥匙串暂时不可用', 'key-unavailable': '缺少密钥' };
 
-// One API account per endpoint origin and key. Chat billing keys its records
-// the same way, so both always agree on which account a request used.
-export const apiFingerprint = (baseUrl, key) => createHash('sha256').update(new URL(baseUrl).origin + '\0' + key).digest('hex');
-const apiId = context => 'api-' + apiFingerprint(context.baseUrl, context.key).slice(0, 12);
 
 function readState(file) {
   let saved;
@@ -60,13 +53,15 @@ function balanceOf(result) {
     full: result.totalGranted > 0 ? result.totalGranted : result.balanceFull > 0 ? result.balanceFull : null };
 }
 
+const DASHBOARDS = { codex: 'https://chatgpt.com/codex/settings/usage', claude: 'https://claude.ai/settings/usage' };
+
 // The quota book: every account the pet knows, the Codex and Claude
 // subscriptions and the API accounts behind Codex providers and the pet, with
 // what is left, how fast it goes and which account is in use now. The pet only
-// renders what the book says.
+// renders what the book says. billing() is the pet's chat billing, once chat runs.
 export class QuotaBook {
-  constructor({ whale, pet = () => null, now = Date.now }) {
-    this.whale = whale; this.pet = pet; this.now = now;
+  constructor({ whale, billing = () => null, now = Date.now }) {
+    this.whale = whale; this.billing = billing; this.now = now;
     this.dataDir = whale.config.dataDir; this.file = path.join(this.dataDir, STATE_FILE);
     this.balances = new Map(); this.refreshing = null;
     Object.assign(this, readState(this.file));
@@ -74,42 +69,19 @@ export class QuotaBook {
   save() {
     try { writeJson(this.file, { version: 1, activity: this.activity, pin: this.pin, seeded: this.seeded }); } catch {}
   }
-  // The pet's endpoint as an API context, or null when it has no key.
-  petContext(endpoint) {
-    if (endpoint === undefined) { try { endpoint = this.pet(); } catch { endpoint = null; } }
-    if (!endpoint?.baseUrl || !endpoint.key) return null;
-    let url;
-    try { url = new URL(endpoint.baseUrl); } catch { return null; }
-    const deepseek = officialDeepSeek(endpoint.baseUrl);
-    return { setting: { ...structuredClone(DEFAULT_CONFIG), provider: deepseek ? 'deepseek' : 'auto', currency: deepseek ? 'CNY' : 'USD' },
-      id: 'pet', model: endpoint.model || '', profileName: '', providerName: deepseek ? 'DeepSeek' : url.hostname,
-      baseUrl: url.href.replace(/\/+$/, ''), key: endpoint.key, keySource: 'pet', keyStatus: 'ready',
-      accountId: apiFingerprint(endpoint.baseUrl, endpoint.key).slice(0, 24),
-      dashboardUrl: deepseek ? 'https://platform.deepseek.com/usage' : url.origin, sourceId: 'pet', sourceName: '大肥鱼', sessionProvider: '' };
-  }
-  // Every API endpoint and key in use: the default Codex provider when it has
-  // an API key, each extra Codex config, and the pet. One endpoint and key is
-  // one account, whatever uses it. A config that cannot be used is listed
-  // apart, with the reason.
+  // Every visible API account with what uses it: Codex providers, and the pet.
+  // One whose key cannot be read is listed apart, with the reason.
   apiAccounts() {
-    const accounts = new Map(), broken = [];
-    const add = (context, use, name) => {
-      const id = apiId(context);
-      if (!accounts.has(id)) accounts.set(id, { id, context, name, uses: [] });
-      if (!accounts.get(id).uses.includes(use)) accounts.get(id).uses.push(use);
-    };
-    let primary = null, sources = [];
-    try { primary = this.whale.config.resolve(); } catch {}
-    if (primary?.key) add(primary, 'codex:' + primary.sessionProvider, primary.providerName);
-    try { sources = this.whale.config.configuredSources(); } catch {}
-    for (const { source, context, error } of sources) {
-      if (context?.key) add(context, 'codex:' + context.sessionProvider, source.name);
-      else broken.push({ id: 'source-' + source.id, name: source.name, uses: context ? ['codex:' + context.sessionProvider] : [],
-        error: error || KEY_PROBLEMS[context?.keyStatus] || KEY_PROBLEMS['key-unavailable'] });
+    const store = this.whale.accounts, data = store.load(), accounts = [], broken = [];
+    for (const account of data.accounts) {
+      if (account.hidden) continue;
+      const context = store.context(account);
+      const uses = [...account.codexProviders.map(name => 'codex:' + name), ...(account.id === data.petAccountId ? ['pet'] : [])];
+      if (context.key) accounts.push({ id: account.id, context, name: account.name, uses });
+      else broken.push({ id: account.id, name: account.name, host: new URL(account.endpoint).hostname, uses,
+        error: KEY_PROBLEMS[context.keyStatus] || KEY_PROBLEMS['key-unavailable'] });
     }
-    const pet = this.petContext();
-    if (pet) add(pet, 'pet', pet.providerName);
-    return { accounts: [...accounts.values()], broken };
+    return { accounts, broken };
   }
   // Queries every API account once; the runtime does this every minute, so the
   // pet never has to ask.
@@ -128,14 +100,19 @@ export class QuotaBook {
   async fill() {
     if (this.apiAccounts().accounts.some(account => !this.balances.has(account.id))) await this.refresh();
   }
+  // Queries one account again now, as when you ask for it.
+  async query(id) {
+    const account = this.apiAccounts().accounts.find(item => item.id === id);
+    if (account) this.balances.set(id, await this.whale.getBalance({ context: account.context, force: true }).catch(() => ({ ok: false, error: '额度查询失败' })));
+    return this.snapshot().accounts.find(item => item.id === id) || null;
+  }
   // The pet account's balance for chat billing, through the same query and
   // cache as every other account.
-  async petBalance({ baseUrl, key }) {
-    const pet = this.petContext({ baseUrl, key });
-    if (!pet) throw new Error('会话账户没有密钥');
-    const account = this.apiAccounts().accounts.find(item => item.id === apiId(pet));
-    const result = await this.whale.getBalance({ context: account?.context || pet, force: true });
-    if (account) this.balances.set(account.id, result);
+  async petBalance() {
+    const pet = this.apiAccounts().accounts.find(account => account.uses.includes('pet'));
+    if (!pet) throw new Error('大肥鱼账户没有可用的密钥');
+    const result = await this.whale.getBalance({ context: pet.context, force: true });
+    this.balances.set(pet.id, result);
     if (!result?.ok || !Number.isFinite(result.totalBalance)) throw new Error(result?.error || '余额查询失败');
     return { amount: result.totalBalance, currency: result.currency };
   }
@@ -146,14 +123,15 @@ export class QuotaBook {
   // Codex finished a turn: on the subscription when its log carried quota
   // windows, otherwise on the API account it ran against.
   codexTurn({ ts, subscription, context }) {
+    const account = !subscription && context?.key ? this.whale.accounts.account(context.sourceId) : null;
     if (subscription) this.touch('codex', ts);
-    else if (context?.key && context.baseUrl) this.touch(apiId(context), ts);
+    else if (account) this.touch(account.id, ts);
   }
   // You wrote to the pet, so its account is in use. The pet's own messages,
   // such as proactive chat, are not activity.
   petMessage(at = this.now()) {
-    const pet = this.petContext();
-    if (pet) this.touch(apiId(pet), at);
+    const pet = this.whale.accounts.load().petAccountId;
+    if (pet) this.touch(pet, at);
   }
   // Activity the book reads rather than hears about: Claude replies, and on the
   // first run the latest Codex turn and Claude snapshot.
@@ -192,7 +170,7 @@ export class QuotaBook {
     let today = Number.isFinite(result.todayUsage) ? result.todayUsage : total(dayKey(now));
     let pet = null;
     if (account.uses.includes('pet') && days.every(day => day.total === null)) {
-      try { pet = this.pet()?.billing?.dailySpend({ baseUrl: account.context.baseUrl, key: account.context.key, currency, days: 7, now }); } catch {}
+      try { pet = this.billing()?.dailySpend({ baseUrl: account.context.baseUrl, key: account.context.key, currency, days: 7, now }); } catch {}
       if (pet?.days.length) days = pet.days;
       if (today === null && pet) today = pet.today;
     }
@@ -222,7 +200,7 @@ export class QuotaBook {
     const list = [this.subscriptionAccount('codex', codexSnapshot(this.whale.subscriptionRateLimitsCache), now),
       this.subscriptionAccount('claude', readClaudeSnapshot(this.dataDir, now), now),
       ...accounts.map(account => this.apiAccount(account, now)),
-      ...broken.map(item => ({ id: item.id, type: 'api', provider: 'api', name: item.name, host: '', uses: item.uses, available: false,
+      ...broken.map(item => ({ id: item.id, type: 'api', provider: 'api', name: item.name, host: item.host || '', uses: item.uses, available: false,
         windows: [], balance: null, spend: null, pace: null, observedAt: null, stale: false, error: item.error, lastActiveAt: iso(this.activity[item.id]) }))];
     return { ok: true, current: this.currentId(list), accounts: list };
   }
@@ -234,6 +212,13 @@ export class QuotaBook {
     for (const [id, at] of Object.entries(this.activity)) if (ids.has(id) && (!latest || at > latest.at)) latest = { id, at };
     if (this.pin && ids.has(this.pin.id) && (!latest || this.pin.at >= latest.at)) return this.pin.id;
     return latest?.id || list.find(account => account.available)?.id || null;
+  }
+  // Where to see the current account's usage on its own site.
+  dashboardUrl() {
+    const snapshot = this.snapshot(), id = snapshot.current;
+    if (DASHBOARDS[id]) return DASHBOARDS[id];
+    const account = this.apiAccounts().accounts.find(item => item.id === id) || this.apiAccounts().accounts[0];
+    return account?.context.dashboardUrl || '';
   }
   // Shows an account until a later activity moves the pet on. A choice carried
   // over from an older pet keeps the time it was made.

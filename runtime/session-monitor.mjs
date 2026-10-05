@@ -226,12 +226,16 @@ export class SessionMonitor {
   }
   start() {
     if (this.worker) return;
-    let c;
-    try { c = this.service.config.resolve(); }
-    catch { c = { model: '', setting: { monitorSessions: false } }; }
+    const settings = () => {
+      let model = '', enabled = false;
+      try { model = this.service.config.resolve().model; } catch {}
+      try { enabled = this.service.accounts.monitorSessions(); } catch {}
+      return { model, enabled };
+    };
+    const c = settings();
     this.worker = new Worker(new URL('./session-worker.mjs', import.meta.url), { workerData: {
       root: path.join(this.service.config.codexHome, 'sessions'), defaultModel: c.model,
-      intervalMs: this.intervalMs, discoverMs: this.discoverMs, enabled: c.setting.monitorSessions,
+      intervalMs: this.intervalMs, discoverMs: this.discoverMs, enabled: c.enabled,
       recoverIds: this.service.prepareRecovery?.() || [],
     } });
     this.worker.on('message', message => {
@@ -250,7 +254,8 @@ export class SessionMonitor {
     this.worker.on('exit', code => { if (!this.stopped && code) this.snapshot.error = '会话监测线程退出'; });
     this.worker.unref();
     this.timer = setInterval(() => {
-      try { const current = this.service.config.resolve(); this.worker.postMessage({ enabled: current.setting.monitorSessions, defaultModel: current.model }); } catch {}
+      const current = settings();
+      this.worker.postMessage({ enabled: current.enabled, defaultModel: current.model });
     }, 3000); this.timer.unref();
   }
   async stop({ timeoutMs = 1200 } = {}) {

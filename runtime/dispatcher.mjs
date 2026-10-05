@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { ROOT, DATA_HOME, VERSION, readJson, writeJson } from './paths.mjs';
@@ -8,17 +9,23 @@ import { createWidgetHost } from '../lib/widget-host.mjs';
 import { migrateData, stripRetiredModules } from './migration.mjs';
 import { createFxService } from './fx.mjs';
 import { MEDIA_POLICY } from '../lib/media-validation.mjs';
-import { ChatService, savedEndpoint } from './chat/service.mjs';
+import { ChatService } from './chat/service.mjs';
 import { claudeLastTurn, claudeSubscription } from './claude-usage.mjs';
 import { QuotaBook } from './quota/book.mjs';
+import { claudeIntegrationStatus, configureClaudeStatusline } from './claude-integration.mjs';
 
 export const UI_ORIGIN = 'whale://widget';
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.gif': 'image/gif', '.mp3': 'audio/mpeg' };
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 const jsonResult = (status, payload) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8' }, body: Buffer.from(JSON.stringify(payload)) });
+// A change the user asked for: its own error message is the answer when it is refused.
+async function change(work) {
+  try { return jsonResult(200, { ok: true, ...await work() }); }
+  catch (error) { return jsonResult(400, { ok: false, error: error?.message || '操作未完成，请重试' }); }
+}
 
 // Dispatch original resource handlers entirely in process; no HTTP listener exists.
-export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVault = null, monitor = true, autoRefresh = true, fetchImpl, fxFetchImpl = fetchImpl, chatFetchImpl = fetchImpl, chatActivityOptions = {}, onStop = () => {}, onShow = () => {}, onChatNotice = () => {}, statusInfo = () => ({}) } = {}) {
+export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(os.homedir(), '.claude'), service = null, secretVault = null, monitor = true, autoRefresh = true, fetchImpl, fxFetchImpl = fetchImpl, chatFetchImpl = fetchImpl, chatActivityOptions = {}, onStop = () => {}, onShow = () => {}, onChatNotice = () => {}, statusInfo = () => ({}) } = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
   migrateData(dataDir);
   const whale = service || new WhaleService({ dataDir, secretVault, ...(fetchImpl ? { fetchImpl } : {}) });
@@ -27,12 +34,11 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
   createWidgetHost(dataDir).apply({ whale, webServer: { register: r => { routes.set(r.path, r.handler); return () => routes.delete(r.path); }, tapIndex: () => () => {} }, effect: f => effects.push(f()) });
   let closing = false, closeJob = null;
   let chat = null;
-  const chatService = () => chat ||= new ChatService({ dataDir, secretVault, canProactive: () => { const status = statusInfo(); return status.visible !== false && status.present !== false; }, onNotice: onChatNotice,
-    activityOptions: chatActivityOptions, queryBalance: credentials => book.petBalance(credentials), onUserMessage: () => book.petMessage(),
+  const chatService = () => chat ||= new ChatService({ dataDir, secretVault, accounts: whale.accounts, canProactive: () => { const status = statusInfo(); return status.visible !== false && status.present !== false; }, onNotice: onChatNotice,
+    activityOptions: chatActivityOptions, queryBalance: () => book.petBalance(), onUserMessage: () => book.petMessage(),
     ...(chatFetchImpl ? { fetchImpl: chatFetchImpl } : {}) });
-  // The book reads the pet's saved endpoint until the chat service starts, so
-  // looking at quota never starts proactive chat.
-  const book = new QuotaBook({ whale, pet: () => chat ? { baseUrl: chat.settings.baseUrl, key: chat.key(), model: chat.settings.model, billing: chat.billing } : savedEndpoint(dataDir, secretVault) });
+  // Looking at quota never starts the chat service, and so never proactive chat.
+  const book = new QuotaBook({ whale, billing: () => chat?.billing });
   whale.onTurnEnd = turn => book.codexTurn(turn);
   const watcher = monitor ? new SessionMonitor(whale) : null;
   watcher?.start();
@@ -63,7 +69,7 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
         if (bytes.length > 128 * 1024) return jsonResult(413, { ok: false, error: '会话请求过大' });
         return chatService().dispatch(url, { method, body: bytes, signal });
       }
-      if (url.pathname === '/api/status' && method === 'GET') return jsonResult(200, { ok: true, version: VERSION, buildVersion, transport: 'local-ipc', webpage: false, provider: whale.config.publicInfo(), monitor: watcher?.status() || { watching: 0, activeTurns: 0 }, subscriptionRateLimits: whale.subscriptionRateLimits(), dataDir, ...statusInfo() });
+      if (url.pathname === '/api/status' && method === 'GET') return jsonResult(200, { ok: true, version: VERSION, buildVersion, transport: 'local-ipc', webpage: false, provider: codexProvider(), monitor: watcher?.status() || { watching: 0, activeTurns: 0 }, subscriptionRateLimits: whale.subscriptionRateLimits(), dataDir, ...statusInfo() });
       if (url.pathname === '/api/quotas' && method === 'GET') {
         if (url.searchParams.get('refresh') === '1') await book.refresh({ force: true });
         else await book.fill();
@@ -77,28 +83,33 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
       if (url.pathname === '/api/subscription-rate-limits' && method === 'GET') return jsonResult(200, whale.subscriptionRateLimits());
       if (url.pathname === '/api/claude/subscription' && method === 'GET') return jsonResult(200, claudeSubscription(dataDir));
       if (url.pathname === '/api/claude/last-turn' && method === 'GET') return jsonResult(200, claudeLastTurn(dataDir));
-      if (url.pathname === '/api/config') {
-        if (method === 'GET') return jsonResult(200, { ok: true, ...whale.config.publicInfo() });
-        if (method === 'PUT') {
-          const input = parsed();
-          if (!input || typeof input !== 'object' || Array.isArray(input)) return jsonResult(400, { ok: false, error: '设置格式无效' });
-          // sourceSecrets is accepted only on this local, authenticated desktop
-          // request. It is never forwarded into ConfigStore or written to the
-          // settings JSON; the macOS vault stores ciphertext separately.
-          const { sourceSecrets = {}, ...settings } = input;
-          if (!sourceSecrets || typeof sourceSecrets !== 'object' || Array.isArray(sourceSecrets) || Object.keys(sourceSecrets).length > 20) return jsonResult(400, { ok: false, error: '直接输入的密钥格式无效' });
-          const saved = whale.config.save(settings);
-          const sources = new Map(saved.sources.map(source => [source.id, source]));
-          for (const [id, rawSecret] of Object.entries(sourceSecrets)) {
-            if (typeof rawSecret !== 'string' || rawSecret.length > 16384) return jsonResult(400, { ok: false, error: '直接输入的密钥格式无效' });
-            if (!rawSecret.trim()) continue;
-            const source = sources.get(id);
-            if (!source || source.keyMode !== 'keychain') return jsonResult(400, { ok: false, error: '直接输入密钥只能用于已选择 macOS 钥匙串的数据源' });
-            if (!secretVault?.write) return jsonResult(503, { ok: false, error: '此运行环境不能使用 macOS 钥匙串' });
-            secretVault.write(source.keyRef, rawSecret);
-          }
-          return jsonResult(200, { ok: true, settings: saved });
-        }
+      if (url.pathname === '/api/quota-accounts') {
+        // Opening the accounts also looks for Codex providers added since.
+        if (method === 'GET') return change(() => { whale.accounts.discover(); return { ...whale.accounts.publicList(), claude: claudeIntegrationStatus({ claudeHome }) }; });
+        if (method === 'POST') return change(async () => {
+          const account = whale.accounts.add(parsed());
+          return { account, quota: await book.query(account.id) };
+        });
+        return jsonResult(405, { ok: false });
+      }
+      const accountRoute = url.pathname.match(/^\/api\/quota-accounts\/([a-z][a-z0-9-]{0,40})(\/query)?$/);
+      if (accountRoute && accountRoute[2] && method === 'POST') return change(async () => ({ quota: await book.query(accountRoute[1]) }));
+      if (accountRoute && !accountRoute[2] && method === 'PUT') return change(async () => {
+        const account = whale.accounts.update(accountRoute[1], parsed());
+        return { account, quota: account.hidden ? null : await book.query(account.id) };
+      });
+      if (url.pathname === '/api/quota-settings' && method === 'PUT') return change(() => {
+        const input = parsed();
+        if (typeof input?.monitorSessions === 'boolean') whale.accounts.setMonitorSessions(input.monitorSessions);
+        return whale.accounts.publicList();
+      });
+      if (url.pathname === '/api/claude/integration') {
+        if (method === 'GET') return jsonResult(200, { ok: true, ...claudeIntegrationStatus({ claudeHome }) });
+        if (method === 'POST') return change(() => {
+          const action = parsed()?.action;
+          if (!['install', 'uninstall'].includes(action)) throw new Error('无效的 Claude 接入操作');
+          return { result: configureClaudeStatusline(action, { claudeHome, dataDir }), ...claudeIntegrationStatus({ claudeHome }) };
+        });
         return jsonResult(405, { ok: false });
       }
       if (url.pathname === '/api/fx/usd-cny') {
@@ -129,7 +140,7 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
       }
       if (url.pathname === '/api/show' && method === 'POST') { onShow(); return jsonResult(200, { ok: true, desktop: 'shown' }); }
       if (url.pathname === '/api/stop' && method === 'POST') { setTimeout(onStop, 100); return jsonResult(200, { ok: true }); }
-      const uiFiles = { '/': 'widget.html', '/widget.html': 'widget.html', '/client.js': 'client.js', '/ui.css': 'ui.css', '/render.js': 'render.js', '/input.js': 'input.js', '/alpha-worker.js': 'alpha-worker.js', '/money.js': 'money.js', '/media-guard.js': 'media-guard.js', '/turn-notice.js': 'turn-notice.js', '/usage-client.js': 'usage-client.js', '/bubble-queue.js': 'bubble-queue.js', '/pet-geometry.js': 'pet-geometry.js', '/usage-presentation.js': 'usage-presentation.js', '/quota-presentation.js': 'quota-presentation.js', '/quota-view.js': 'quota-view.js', '/quota.js': 'quota.js', '/quota.css': 'quota.css', '/companion-display.js': 'companion-display.js', '/chat.js': 'chat.js', '/chat-client.js': 'chat-client.js', '/chat-billing.js': 'chat-billing.js', '/chat.css': 'chat.css' };
+      const uiFiles = { '/': 'widget.html', '/widget.html': 'widget.html', '/toast.js': 'toast.js', '/quota-manager.js': 'quota-manager.js', '/ui.css': 'ui.css', '/render.js': 'render.js', '/input.js': 'input.js', '/alpha-worker.js': 'alpha-worker.js', '/money.js': 'money.js', '/media-guard.js': 'media-guard.js', '/turn-notice.js': 'turn-notice.js', '/usage-client.js': 'usage-client.js', '/bubble-queue.js': 'bubble-queue.js', '/pet-geometry.js': 'pet-geometry.js', '/usage-presentation.js': 'usage-presentation.js', '/quota-presentation.js': 'quota-presentation.js', '/quota-view.js': 'quota-view.js', '/quota.js': 'quota.js', '/quota.css': 'quota.css', '/companion-display.js': 'companion-display.js', '/chat.js': 'chat.js', '/chat-client.js': 'chat-client.js', '/chat-billing.js': 'chat-billing.js', '/chat.css': 'chat.css' };
       let file;
       if (Object.hasOwn(uiFiles, url.pathname)) file = path.join(ROOT, 'desktop', 'ui', uiFiles[url.pathname]);
       else if (url.pathname === '/lib/event-stream.js' || /^\/vendor\/eventsource-parser\/dist\/(index|parse|errors|types|stream)\.js$/.test(url.pathname)) file = path.join(ROOT, url.pathname.slice(1));
@@ -174,6 +185,11 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, secretVa
       if (failures.length) throw new AggregateError(failures, '部分挂件组件未能正常关闭');
     })();
     return closeJob;
+  }
+  // The default Codex provider and model, for the status read.
+  function codexProvider() {
+    try { const config = whale.config.resolve(); return { id: config.id, model: config.model, providerName: config.providerName, baseUrl: config.baseUrl }; }
+    catch { return {}; }
   }
   return { dispatch, whale, book, watcher, close };
 }

@@ -1,5 +1,4 @@
 import path from 'node:path';
-import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJson } from '../paths.mjs';
 import { completionUrl } from './provider.mjs';
@@ -8,12 +7,12 @@ import { Conversations } from './conversations.mjs';
 import { ChatActivity } from './activity.mjs';
 import { POMODORO_TOOLS, POMODORO_POLICY } from './pomodoro.mjs';
 import { generateReply } from './reply.mjs';
+import { AccountStore } from '../quota/accounts.mjs';
 
 const DEFAULTS = { baseUrl: '', model: 'deepseek-flash', persona: '', maxTokens: 1024, backgroundMaxTokens: 1024 };
 // A runaway guard only; the token settings decide how long a reply may be.
 const MAX_REPLY_CHARS = 128000;
 const KEY_REF = 'whale_chat_api_key_v1';
-const NEXT_KEY_REF = KEY_REF + '_next';
 const json = (status, value) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8' }, body: Buffer.from(JSON.stringify(value)) });
 const BACKGROUND_INSTRUCTION = '按角色人设说一两句自然、简短的话。沿用过往对话的语言；没有上下文时用中文。不要声称看到了用户正在做什么，也不要假装执行了工具。';
 const DECLINE_MARK = '[不打扰]';
@@ -23,31 +22,24 @@ function declined(text) {
   const bare = text.replace(/[\s\p{P}]/gu, '');
   return /[[【]不打扰[\]】]/.test(text) || bare.startsWith('不打扰') && bare.length <= 8;
 }
-function savedAt(file) { try { return fs.statSync(file).mtimeMs; } catch { return Infinity; } }
+// The chat settings file keeps the reply settings. Its endpoint and key ref
+// only mirror the pet's account, so an older pet still finds them.
 function storedSettings(file) {
   const stored = readJson(file, {});
   return { ...DEFAULTS, ...stored, keyRef: typeof stored.keyRef === 'string' ? stored.keyRef : stored.baseUrl ? KEY_REF : '' };
 }
 
-// The pet's saved endpoint and key, read without starting the chat service.
-export function savedEndpoint(dataDir, vault) {
-  try {
-    const settings = storedSettings(path.join(dataDir, 'chat-settings.json'));
-    const key = settings.keyRef ? vault?.read?.(settings.keyRef)?.value || '' : '';
-    return settings.baseUrl && key ? { baseUrl: settings.baseUrl, key, model: settings.model } : null;
-  } catch { return null; }
-}
-
 export class ChatService {
-  // queryBalance reads the account balance from the quota book; onUserMessage
-  // tells it that you wrote to the pet.
-  constructor({ dataDir, secretVault, fetchImpl = fetch, idleMs = 60000, timeoutMs = 180000, canProactive = () => true, onNotice = () => {}, now = Date.now,
+  // The pet talks through its account in the account store (the quota book's).
+  // queryBalance reads that account's balance from the quota book;
+  // onUserMessage tells the book that you wrote to the pet.
+  constructor({ dataDir, secretVault, accounts = null, fetchImpl = fetch, idleMs = 60000, timeoutMs = 180000, canProactive = () => true, onNotice = () => {}, now = Date.now,
     activityOptions = {}, queryBalance = null, onUserMessage = () => {} }) {
     this.configFile = path.join(dataDir, 'chat-settings.json');
     this.settings = storedSettings(this.configFile);
-    this.settingsSavedAt = savedAt(this.configFile);
+    this.accounts = accounts || new AccountStore({ dataDir, vault: secretVault });
     this.conversations = new Conversations(dataDir);
-    this.vault = secretVault; this.fetchImpl = fetchImpl; this.memoryKey = ''; this.active = null; this.background = null;
+    this.fetchImpl = fetchImpl; this.active = null; this.background = null;
     this.cancelledIds = new Set();
     this.idleMs = idleMs; this.timeoutMs = timeoutMs;
     this.now = activityOptions.now || now;
@@ -55,19 +47,31 @@ export class ChatService {
     this.activity = new ChatActivity({ dataDir, canProactive: () => canProactive() && !this.active && !this.background,
       onProactive: () => this.proactive(), onReminder: state => this.reminder(state), onNotice, now: this.now, ...activityOptions });
   }
-  key() { return this.memoryKey || (this.settings.keyRef ? this.vault?.read(this.settings.keyRef)?.value : '') || ''; }
+  // The pet's account: where requests go and the key they carry. Its key time
+  // starts the recovery of old chat history into billing.
+  endpoint() {
+    const pet = this.accounts.pet();
+    return pet ? { id: pet.id, name: pet.name, baseUrl: pet.baseUrl, key: pet.key, keyStorage: pet.keyStorage, keySetAt: pet.keySetAt || Infinity } :
+      { id: '', name: '', baseUrl: '', key: '', keyStorage: 'session', keySetAt: Infinity };
+  }
+  key() { return this.endpoint().key; }
   get turns() { return this.conversations.current.turns; }
-  recoverBilling(key = this.key()) {
-    this.billing.recoverHistory(this.conversations.allTurns(), { baseUrl: this.settings.baseUrl, key, settingsSavedAt: this.settingsSavedAt });
+  recoverBilling(endpoint = this.endpoint()) {
+    this.billing.recoverHistory(this.conversations.allTurns(), { baseUrl: endpoint.baseUrl, key: endpoint.key, settingsSavedAt: endpoint.keySetAt });
   }
   publicConfig() {
-    const { baseUrl, model, persona, maxTokens, backgroundMaxTokens } = this.settings;
-    return { baseUrl, model, persona, maxTokens, backgroundMaxTokens, hasKey: !!this.key(), keyStorage: this.memoryKey ? 'session' : this.vault?.available?.() ? 'encrypted' : 'session' };
+    const { model, persona, maxTokens, backgroundMaxTokens } = this.settings, endpoint = this.endpoint();
+    const accounts = this.accounts.publicList().accounts.filter(account => !account.hidden || account.id === endpoint.id)
+      .map(account => ({ id: account.id, name: account.name, host: account.host, ready: account.keyStatus === 'ready' }));
+    return { accountId: endpoint.id, accountName: endpoint.name, accounts, baseUrl: endpoint.baseUrl, model, persona, maxTokens, backgroundMaxTokens,
+      hasKey: !!endpoint.key, keyStorage: endpoint.keyStorage };
   }
+  // Saves the reply settings and which account the pet uses. An endpoint and
+  // key given instead pick, or add, the account behind them. The pet moves to
+  // that account only once the settings are saved.
   save(input) {
     if (this.active) throw new Error('请先停止当前回复，再修改会话设置');
-    const baseUrl = String(input.baseUrl || '').trim(), model = String(input.model || '').trim();
-    completionUrl(baseUrl);
+    const model = String(input.model || '').trim();
     const persona = String(input.persona || '').trim(), maxTokens = Number(input.maxTokens);
     const tokenLimit = value => Number.isInteger(value) && value >= 1 && value <= 32768;
     const backgroundMaxTokens = input.backgroundMaxTokens === undefined ? this.settings.backgroundMaxTokens : Number(input.backgroundMaxTokens);
@@ -75,23 +79,19 @@ export class ChatService {
     if (persona.length > 16000) throw new Error('角色人设最多 16000 个字符');
     if (!tokenLimit(maxTokens)) throw new Error('最长回复长度须为 1 到 32768 个 token');
     if (!tokenLimit(backgroundMaxTokens)) throw new Error('主动消息最长回复须为 1 到 32768 个 token');
-    const newKey = String(input.apiKey || '').trim().replace(/^Bearer\s+/i, '');
-    if (newKey.length > 16384 || /[\x00-\x20]/.test(newKey)) throw new Error('API key 格式无效');
-    if (this.settings.baseUrl && new URL(baseUrl).origin !== new URL(this.settings.baseUrl).origin && !newKey) throw new Error('更换会话网站时请重新输入该网站的 API key');
-    if (!newKey && !this.key()) throw new Error('请输入会话 API key');
-    this.recoverBilling();
-    let keyRef = this.settings.keyRef;
-    const encrypted = newKey && this.vault?.available?.();
-    if (newKey) {
-      // Write the inactive slot; the atomic settings replacement commits the
-      // endpoint and key together. A failed save leaves the active key intact.
-      keyRef = encrypted ? keyRef === KEY_REF ? NEXT_KEY_REF : KEY_REF : '';
-      if (encrypted) this.vault.write(keyRef, newKey);
+    let accountId = typeof input.accountId === 'string' ? input.accountId : this.endpoint().id;
+    if (input.baseUrl !== undefined || input.apiKey) {
+      completionUrl(String(input.baseUrl || '').trim());
+      accountId = this.accounts.adopt({ baseUrl: String(input.baseUrl || '').trim(), key: String(input.apiKey || '').trim() }).id;
     }
-    const settings = { baseUrl, model, persona, maxTokens, backgroundMaxTokens, keyRef };
+    const account = this.accounts.account(accountId);
+    if (!account) throw new Error('请选择大肥鱼使用的账户');
+    completionUrl(account.endpoint);
+    this.recoverBilling();
+    const mirror = account.key.mode === 'keychain' ? { baseUrl: account.endpoint, keyRef: account.key.ref } : {};
+    const settings = { ...this.settings, ...mirror, model, persona, maxTokens, backgroundMaxTokens };
     writeJson(this.configFile, settings); this.settings = settings;
-    this.settingsSavedAt = savedAt(this.configFile);
-    if (newKey) this.memoryKey = encrypted ? '' : newKey;
+    if (account.id !== this.endpoint().id) this.accounts.setPet(account.id);
     return this.publicConfig();
   }
   history() { return { turns: structuredClone(this.turns), activeId: this.active?.id || null,
@@ -115,8 +115,9 @@ export class ChatService {
   // one when that is absent or deleted), dated at that moment, and returns where
   // it went; the caller commits only if the reply still applies when it is due.
   async backgroundReply({ prompt, source, history = [], conversationId }) {
-    if (this.active || this.background || !this.key() || !this.settings.baseUrl) return null;
-    const key = this.key(), settings = { ...this.settings, maxTokens: this.settings.backgroundMaxTokens };
+    const endpoint = this.endpoint();
+    if (this.active || this.background || !endpoint.key || !endpoint.baseUrl) return null;
+    const key = endpoint.key, settings = { ...this.settings, baseUrl: endpoint.baseUrl, maxTokens: this.settings.backgroundMaxTokens };
     const controller = new AbortController(), id = randomUUID();
     const background = { controller };
     background.done = new Promise(resolve => { background.resolve = resolve; });
@@ -173,11 +174,12 @@ export class ChatService {
     if (!text || text.length > 16000) throw new Error('消息不能为空，且最多 16000 个字符');
     if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{8,100}$/.test(id) || this.conversations.allTurns().some(turn => turn.id === id)) throw new Error('无效或重复的消息标识');
     if (input.conversationId !== undefined && input.conversationId !== this.conversations.currentId) throw new Error('当前会话已切换，请重新发送');
-    const key = this.key();
-    if (!key) throw new Error('请先在会话设置中填写 API key');
-    completionUrl(this.settings.baseUrl);
-    this.recoverBilling(key);
-    const controller = new AbortController(), settings = { ...this.settings };
+    const endpoint = this.endpoint(), key = endpoint.key;
+    if (!endpoint.id) throw new Error('请先在会话设置里选择大肥鱼使用的账户');
+    if (!key) throw new Error('大肥鱼账户还没有可用的密钥，请在额度管理里填写');
+    completionUrl(endpoint.baseUrl);
+    this.recoverBilling(endpoint);
+    const controller = new AbortController(), settings = { ...this.settings, baseUrl: endpoint.baseUrl };
     if (this.cancelledIds.has(id)) controller.abort();
     this.background?.controller.abort();
     const conversationId = this.conversations.currentId, history = this.memoryOf(this.conversations.current);
@@ -236,8 +238,8 @@ export class ChatService {
         }
       }
       if (url.pathname === '/api/chat/billing' && method === 'GET') {
-        const key = this.key(); this.recoverBilling(key);
-        return json(200, { ok: true, billing: await this.billing.summary({ baseUrl: this.settings.baseUrl, key, force: url.searchParams.get('refresh') === '1' }) });
+        const endpoint = this.endpoint(); this.recoverBilling(endpoint);
+        return json(200, { ok: true, billing: await this.billing.summary({ baseUrl: endpoint.baseUrl, key: endpoint.key, force: url.searchParams.get('refresh') === '1' }) });
       }
       if (url.pathname === '/api/chat/activity' && method === 'GET') return json(200, { ok: true, ...this.activitySnapshot() });
       if (url.pathname === '/api/chat/activity/settings') {
@@ -258,6 +260,5 @@ export class ChatService {
     background?.controller.abort();
     if (this.active) { this.active.controller.abort(); await this.active?.job; }
     await background?.done;
-    this.memoryKey = '';
   }
 }

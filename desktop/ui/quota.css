@@ -39,3 +39,37 @@
 .quota-status{color:#a5604f}
 .quota-overview-foot{display:flex;justify-content:flex-end;padding-top:8px;border-top:1px solid #edf0f6}
 .quota-manage{padding:4px 10px;border:1px solid #c9d3e8;border-radius:6px;background:#fff;color:#536ba9;font-size:12px}
+
+/* 额度管理 */
+.quota-manager-frame{padding:24px 26px}
+.quota-manager .dialog-header{align-items:flex-start}
+.quota-manager .dialog-header > div{flex:1}
+.quota-currency{margin:0;font-size:11px;white-space:nowrap}
+.quota-currency select{width:auto;margin:4px 0 0;padding:6px 8px}
+.quota-section h3{margin:20px 0 8px;font-size:13px;color:#356a6c}
+.quota-section:first-child h3{margin-top:4px}
+.quota-card{margin-top:8px;padding:10px 12px;border:1px solid #d9e4e1;border-radius:10px;background:#fbfdfc}
+.quota-card-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
+.quota-card-head strong{font-size:13px;color:#294c54}
+.quota-host{font-size:11px;color:#7b8f93}
+.quota-tag{padding:1px 7px;border-radius:999px;background:#e8f3f1;color:#356a6c;font-size:10px}
+.quota-line{margin:5px 0 0;font-size:12px;line-height:1.5;color:#466b70}
+.quota-line.warn{color:#a5604f}
+.quota-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px}
+.quota-actions button,.quota-inline button,.quota-add-button,.quota-hidden-row button{padding:5px 11px;font-size:12px;border-radius:7px}
+.quota-card .check{margin-top:8px;font-size:12px}
+.quota-inline{display:flex;gap:8px;align-items:center;margin-top:8px}
+.quota-inline input{margin:0}
+.quota-add-button{margin-top:10px}
+.quota-add > strong{font-size:13px;color:#294c54}
+.quota-edit{margin-top:6px}
+.quota-subhead{margin:16px 0 4px;font-size:12px;color:#466b70}
+.quota-prices{display:grid;gap:6px}
+.quota-price-row{display:grid;grid-template-columns:minmax(120px,2fr) repeat(4,minmax(56px,1fr)) auto;gap:6px;align-items:center}
+.quota-price-row input{margin:0;padding:7px 8px}
+.quota-edit > .quiet{margin-top:6px;padding:5px 11px;font-size:12px;border-radius:7px}
+.quota-hidden{margin-top:14px;padding-top:10px}
+.quota-hidden-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;font-size:12px;color:#466b70}
+.chat-account-state{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:6px;font-size:11px;color:#7b8f93}
+.chat-account-state button{padding:4px 10px;font-size:11px;border-radius:7px;flex:none}
+@media (max-width:560px){.quota-price-row{grid-template-columns:1fr 1fr}.quota-manager-frame{padding:18px}}
