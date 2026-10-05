@@ -69,13 +69,15 @@
       if (window.reset) { result.push({ label: window.label, percent: null, level: 'ok', value: '已重置', note: '' }); continue; }
       const percent = clamp(window.remainingPercent);
       const value = finite(window.limit) ? '剩 ' + formatMoney(window.remaining, window.currency) + ' / ' + formatMoney(window.limit, window.currency) : Math.round(percent) + '%';
-      result.push({ label: window.label, percent, level: level(percent), value, note: window.resetsAt ? moment(window.resetsAt, now) + ' 重置' : '' });
+      const notes = [window.resetsAt ? moment(window.resetsAt, now) + ' 重置' : '', window.safe ? '安全额度 ' + formatMoney(window.safe, window.currency) : ''];
+      result.push({ label: window.label, percent, level: level(percent), value, note: notes.filter(Boolean).join(' · ') });
     }
     const balance = account.balance;
     if (balance && balance.unlimited) result.push({ label: '余额', percent: null, level: 'ok', value: '不限额', note: '' });
     else if (balance && finite(balance.amount)) {
       const percent = balance.full > 0 ? clamp(balance.amount / balance.full * 100) : null;
-      result.push({ label: '余额', percent, level: percent === null ? 'ok' : level(percent), value: formatMoney(balance.amount, balance.currency), note: '' });
+      result.push({ label: '余额', percent, level: percent === null ? 'ok' : level(percent), value: formatMoney(balance.amount, balance.currency),
+        note: balance.safe ? '安全额度 ' + formatMoney(balance.safe, balance.currency) : '' });
     }
     return result;
   }

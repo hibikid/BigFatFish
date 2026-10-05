@@ -96,3 +96,10 @@ test('the current account becomes the state the pet\'s bubbles read', () => {
 test('a page that shows today\'s spend apart leaves it out of the pace sentence', () => {
   assert.equal(presentation.paceText(deepseek, { formatMoney: money, now, today: false }), '按近 7 天日均 ¥0.10，约可用 492 天');
 });
+
+test('an account with a safe amount says so beside its bar', () => {
+  const options = { formatMoney: money, now };
+  assert.equal(presentation.rows({ ...deepseek, balance: { ...deepseek.balance, full: 20, safe: 20 } }, options)[0].note, '安全额度 ¥20.00');
+  assert.match(presentation.rows({ ...labkey, windows: [{ ...labkey.windows[0], remainingPercent: 100, safe: 100 }] }, options)[0].note, / 0:00 重置 · 安全额度 \$100\.00$/);
+  assert.deepEqual(plain(presentation.meters({ ...deepseek, balance: { amount: 45.2, currency: 'CNY', full: 20, safe: 20 } })), [{ label: '余额', percent: 100, level: 'ok' }], 'above the safe amount the bar is full');
+});

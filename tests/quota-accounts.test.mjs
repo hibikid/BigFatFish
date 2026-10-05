@@ -78,6 +78,9 @@ test('accounts are added and edited, each Codex provider has one home, and keys 
   assert.throws(() => store.add({ endpoint: 'https://api.moonshot.example.test/other', key: 'synthetic-moon-key' }), /已经添加过/);
   const edited = store.update(added.id, { name: 'Kimi', currency: 'cny', prices: { 'kimi-k2': { input: 4, cachedInput: 1, output: 16 } }, balance: { method: 'newapi' } });
   assert.deepEqual([edited.name, edited.currency, edited.prices['kimi-k2'].output, edited.balance.method], ['Kimi', 'CNY', 16, 'newapi']);
+  assert.equal(store.update(added.id, { safeAmount: '50' }).safeAmount, 50);
+  assert.throws(() => store.update(added.id, { safeAmount: 0 }), /安全额度/);
+  assert.equal(store.update(added.id, { safeAmount: '' }).safeAmount, null, 'clearing it goes back to the full balance');
   const file = path.join(dataDir, 'quota-accounts.json'), saved = fs.readFileSync(file, 'utf8');
   assert.throws(() => store.update(added.id, { prices: { 'kimi-k2': { input: -1, cachedInput: 1, output: 16 } } }), /输入价格/);
   assert.throws(() => store.update(added.id, { codexProviders: ['OpenAI'] }), /只能属于一个账户/);

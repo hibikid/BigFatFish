@@ -65,7 +65,7 @@ test('one endpoint and key is one account, queried once whatever uses it', async
   assert.equal(accounts.length, 4);
   const deepseek = accounts.find(account => account.uses.includes('pet'));
   assert.deepEqual(deepseek.uses, ['codex:deepseek', 'pet']);
-  assert.deepEqual(deepseek.balance, { amount: 45.2, used: null, currency: 'CNY', full: 45.2 });
+  assert.deepEqual(deepseek.balance, { amount: 45.2, used: null, currency: 'CNY', full: 45.2, safe: null });
   assert.equal(calls.filter(url => url.endsWith('/user/balance')).length, 1);
   assert.ok(!JSON.stringify(accounts).includes(petKey) && !JSON.stringify(accounts).includes(relayKey), 'no key leaves the book');
 });
@@ -87,6 +87,21 @@ test('an API quota that resets is a window, paced by the service\'s own daily re
   assert.equal(relay.spend.days7, 15.72 + 21 + 22 + 23 + 24 + 25 + 26);
   assert.deepEqual(relay.spend.average, { amount: 24, days: 7, currency: 'USD' });
   assert.deepEqual(relay.pace, { enough: true, exhaustAt: null, average: relay.spend.average }, '$170.49 at $24 a day outlasts the reset in 3.5 days');
+});
+
+test('an API account at or above its safe amount counts as full', async t => {
+  const { book, whale } = setup(t);
+  const store = whale.accounts, pet = store.pet().id, relay = store.sessionContext('relay').sourceId;
+  store.update(pet, { safeAmount: 20 });
+  store.update(relay, { safeAmount: '100' });
+  await book.refresh();
+  const view = id => book.snapshot().accounts.find(account => account.id === id);
+  assert.deepEqual([view(pet).balance.full, view(pet).balance.safe], [20, 20], '¥45.20 is above the safe ¥20');
+  assert.equal(view(relay).windows[0].remainingPercent, 100, '$170.49 left is above the safe $100');
+  store.update(relay, { safeAmount: 400 });
+  assert.equal(Math.round(view(relay).windows[0].remainingPercent), 43);
+  store.update(pet, { safeAmount: null });
+  assert.deepEqual([view(pet).balance.full, view(pet).balance.safe], [45.2, null], 'without one the full balance counts again');
 });
 
 test('a subscription shows each valid window with its pace, and marks one that reset', async t => {

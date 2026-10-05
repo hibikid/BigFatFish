@@ -57,13 +57,14 @@ export function evaluateAlerts({ accounts, settings, fired = {}, day }) {
       if (window.reset || !Number.isFinite(window.remainingPercent)) continue;
       check('low:' + account.id + ':' + window.id, window.remainingPercent < settings.windowPercent, { accountId: account.id,
         title: account.name + ' ' + window.label + ' 额度不足',
-        text: '剩余 ' + Math.round(window.remainingPercent) + '%' + (Number.isFinite(window.remaining) ? '（' + money(window.remaining, window.currency) + '）' : '') });
+        text: window.safe ? '剩 ' + money(window.remaining, window.currency) + '，安全额度的 ' + Math.round(window.remainingPercent) + '%' :
+          '剩余 ' + Math.round(window.remainingPercent) + '%' + (Number.isFinite(window.remaining) ? '（' + money(window.remaining, window.currency) + '）' : '') });
     }
     const balance = account.balance;
     if (balance && !balance.unlimited && Number.isFinite(balance.amount)) {
       const share = balance.full > 0 ? balance.amount / balance.full * 100 : null, floor = settings.balanceBelow[balance.currency];
       check('low:' + account.id + ':balance', share !== null && share < settings.balancePercent || floor > 0 && balance.amount < floor, { accountId: account.id,
-        title: account.name + ' 余额不足', text: '余额 ' + money(balance.amount, balance.currency) + (share !== null ? '，满格的 ' + Math.round(share) + '%' : '') });
+        title: account.name + ' 余额不足', text: '余额 ' + money(balance.amount, balance.currency) + (share !== null ? '，' + (balance.safe ? '安全额度' : '满格') + '的 ' + Math.round(share) + '%' : '') });
     }
   }
   if (settings.budgetOn) {

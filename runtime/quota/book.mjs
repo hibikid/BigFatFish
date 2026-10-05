@@ -43,19 +43,23 @@ function subscriptionWindows(snapshot, now) {
   return windows;
 }
 
-// The money quotas an API returns, such as a key limit that resets weekly.
-function limitWindows(result) {
+// The money quotas an API returns, such as a key limit that resets weekly. An
+// account's safe amount, when set, is what counts as full: at or above it the
+// share left is 100%.
+function limitWindows(result, safe) {
   const limits = (Array.isArray(result.rateLimits) ? result.rateLimits : []).filter(item => item.limit > 0 && item.remaining >= 0);
   return limits.map((item, index) => ({ id: 'limit-' + (index + 1), label: limits.length > 1 ? '额度 ' + (index + 1) : '额度',
     limit: item.limit, remaining: item.remaining, used: Math.max(0, item.limit - item.remaining), currency: result.currency,
-    remainingPercent: Math.min(100, item.remaining / item.limit * 100), resetsAt: item.resetsAt || null }));
+    remainingPercent: Math.min(100, item.remaining / (safe || item.limit) * 100), safe: safe || null, resetsAt: item.resetsAt || null }));
 }
 
-function balanceOf(result) {
+// A balance is full at the safe amount when one is set, else at the key's
+// total grant, else at the full balance.
+function balanceOf(result, safe) {
   if (result.unlimited) return { unlimited: true, currency: result.currency };
   if (!Number.isFinite(result.totalBalance)) return null;
   return { amount: result.totalBalance, used: Number.isFinite(result.totalUsed) ? result.totalUsed : null, currency: result.currency,
-    full: result.totalGranted > 0 ? result.totalGranted : result.balanceFull > 0 ? result.balanceFull : null };
+    full: safe || (result.totalGranted > 0 ? result.totalGranted : result.balanceFull > 0 ? result.balanceFull : null), safe: safe || null };
 }
 
 const DASHBOARDS = { codex: 'https://chatgpt.com/codex/settings/usage', claude: 'https://claude.ai/settings/usage' };
@@ -83,7 +87,7 @@ export class QuotaBook {
       if (account.hidden) continue;
       const context = store.context(account);
       const uses = [...account.codexProviders.map(name => 'codex:' + name), ...(account.id === data.petAccountId ? ['pet'] : [])];
-      if (context.key) accounts.push({ id: account.id, context, name: account.name, uses, ledgers: [account.ledgerId, ...account.legacyIds] });
+      if (context.key) accounts.push({ id: account.id, context, name: account.name, uses, ledgers: [account.ledgerId, ...account.legacyIds], safeAmount: account.safeAmount });
       else broken.push({ id: account.id, name: account.name, host: new URL(account.endpoint).hostname, uses,
         error: KEY_PROBLEMS[context.keyStatus] || KEY_PROBLEMS['key-unavailable'] });
     }
@@ -191,7 +195,7 @@ export class QuotaBook {
       lastActiveAt: iso(this.activity[account.id]) };
     if (!result) return view;
     if (!result.ok) return { ...view, error: String(result.error || '额度查询失败').slice(0, 200) };
-    const windows = limitWindows(result), balance = balanceOf(result), spend = this.spend(account, result, now);
+    const windows = limitWindows(result, account.safeAmount), balance = balanceOf(result, account.safeAmount), spend = this.spend(account, result, now);
     const primary = windows[0], average = spend.average;
     const pace = primary ? primary.resetsAt ? limitPace({ remaining: primary.remaining, resetsAt: primary.resetsAt, average, now }) : balancePace({ amount: primary.remaining, average }) :
       balance && !balance.unlimited ? balancePace({ amount: balance.amount, average }) : null;

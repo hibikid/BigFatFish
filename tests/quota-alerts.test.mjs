@@ -39,6 +39,11 @@ test('a balance is low against its full balance or a floor in its own currency, 
   const low = evaluateAlerts({ accounts: [deepseek(8)], settings: cleanAlertSettings({ balancePercent: 20 }), day });
   assert.deepEqual(low.raised.map(alert => alert.text), ['余额 ¥8.00，满格的 16%']);
   assert.equal(evaluateAlerts({ accounts: [deepseek(30)], settings: cleanAlertSettings({ balanceBelow: { CNY: 40 } }), day }).raised.length, 1);
+  const safe = { ...deepseek(8), balance: { amount: 8, currency: 'CNY', full: 20, safe: 20 } };
+  assert.deepEqual(evaluateAlerts({ accounts: [safe], settings: cleanAlertSettings({ balancePercent: 50 }), day }).raised.map(alert => alert.text), ['余额 ¥8.00，安全额度的 40%'],
+    'with a safe amount the share is of the safe amount');
+  const safeWindow = { ...relay(0), windows: [{ id: 'limit-1', label: '额度', remainingPercent: 30, remaining: 30, currency: 'USD', safe: 100 }] };
+  assert.deepEqual(evaluateAlerts({ accounts: [safeWindow], settings: cleanAlertSettings({ windowPercent: 50 }), day }).raised.map(alert => alert.text), ['剩 $30.00，安全额度的 30%']);
   assert.equal(evaluateAlerts({ accounts: [deepseek(30)], settings: cleanAlertSettings({ balanceBelow: { USD: 40 } }), day }).raised.length, 0, 'a floor in another currency does not apply');
   const money = evaluateAlerts({ accounts: [relay(9)], settings: cleanAlertSettings({ windowPercent: 50 }), day });
   assert.deepEqual(money.raised.map(alert => alert.text), ['剩余 41%（$165.00）']);

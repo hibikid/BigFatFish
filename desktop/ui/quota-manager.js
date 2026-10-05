@@ -153,9 +153,11 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
     const form = element('form', 'quota-edit');
     const name = input('name', account.name), key = input('key', '', { type: 'password', placeholder: account.keyStatus === 'ready' ? '已保存，留空不变' : '粘贴这个账户的 API 密钥' });
     const unit = select('currency', [['USD', '美元 USD'], ['CNY', '人民币 CNY']].concat(['USD', 'CNY'].includes(account.currency) ? [] : [[account.currency, account.currency]]), account.currency);
+    const safe = Object.assign(input('safeAmount', account.safeAmount ?? '', { type: 'number', placeholder: '留空：按满格余额或额度上限' }), { min: 0, step: 'any' });
     const prices = priceRows(account.prices);
     const grid = element('div', 'field-grid');
-    grid.append(field('名称', name), field('密钥', key, '只存入 macOS 钥匙串，不写进设置文件'), field('币种', unit, '余额接口没有说明币种时，按这个币种记账'));
+    grid.append(field('名称', name), field('密钥', key, '只存入 macOS 钥匙串，不写进设置文件'), field('币种', unit, '余额接口没有说明币种时，按这个币种记账'),
+      field('安全额度', safe, '余额或剩余额度不低于这个金额就算满格（100%），按账户的币种'));
     const advanced = element('details');
     advanced.append(element('summary', '', '高级：查询方式与 Codex 归属'));
     const method = select('method', METHODS, account.balance.method), queryUrl = input('queryUrl', account.balance.queryUrl, { placeholder: account.endpoint.replace(/\/+$/, '') + '/usage' });
@@ -171,7 +173,7 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
     advanced.append(advancedGrid);
     const actions = element('div', 'quota-actions');
     actions.append(button('保存', 'primary', async () => {
-      const patch = { name: name.value, currency: unit.value, prices: prices.read(), dashboardUrl: dashboard.value.trim(),
+      const patch = { name: name.value, currency: unit.value, prices: prices.read(), dashboardUrl: dashboard.value.trim(), safeAmount: safe.value.trim() === '' ? null : safe.value.trim(),
         codexProviders: providers.value.split(/[,，\s]+/).map(item => item.trim()).filter(Boolean),
         balance: { method: method.value, queryUrl: queryUrl.value.trim(), balancePath: balancePath.value.trim(), balanceField: balanceField.value.trim(),
           usedField: usedField.value.trim(), balanceScale: balanceScale.value, billingUsageDivisor: divisor.value, quotaPerUnit: perUnit.value } };

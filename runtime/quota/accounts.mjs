@@ -77,6 +77,14 @@ function cleanPrices(value) {
   }
   return prices;
 }
+// What counts as a full bar for this account: at or above it, the balance or
+// the quota left is full. Empty means the full balance or the quota's limit.
+function cleanSafeAmount(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 1e9) throw new Error('安全额度须为大于 0 的金额');
+  return amount;
+}
 function cleanAccount(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || !ID.test(value.id || '')) throw new Error('额度账户格式无效');
   const endpoint = cleanUrl(String(value.endpoint || ''));
@@ -87,7 +95,7 @@ function cleanAccount(value) {
   return { id: value.id, name: text(value.name, 40) || new URL(endpoint).hostname, endpoint, key: cleanKey(value.key),
     codexProviders: [...new Set((Array.isArray(value.codexProviders) ? value.codexProviders : []).map(item => text(item, 128)).filter(Boolean))].slice(0, 10),
     codexConfig: typeof file === 'string' && file && file.length <= 1024 && !/[\0\r\n]/.test(file) ? { file, provider: text(value.codexConfig.provider, 128) } : null,
-    balance: cleanBalance(value.balance, endpoint), currency, prices: cleanPrices(value.prices || {}),
+    balance: cleanBalance(value.balance, endpoint), currency, prices: cleanPrices(value.prices || {}), safeAmount: cleanSafeAmount(value.safeAmount),
     dashboardUrl: value.dashboardUrl ? cleanUrl(String(value.dashboardUrl)) : '', hidden: value.hidden === true, ledgerId,
     legacyIds: [...new Set((Array.isArray(value.legacyIds) ? value.legacyIds : []).filter(id => LEDGER.test(id) && id !== ledgerId))].slice(0, 20),
     sourceIds: [...new Set((Array.isArray(value.sourceIds) ? value.sourceIds : []).filter(id => SOURCE.test(id)))].slice(0, 20),
@@ -341,7 +349,7 @@ export class AccountStore {
     const { status, source } = this.readKey(account);
     return { id: account.id, name: account.name, host: new URL(account.endpoint).hostname, endpoint: account.endpoint, codexProviders: account.codexProviders,
       codexFile: account.codexConfig ? path.basename(account.codexConfig.file) : '', keyMode: account.key.mode, keyStatus: status, keyStorage: source,
-      balance: account.balance, currency: account.currency, prices: account.prices, dashboardUrl: account.dashboardUrl, hidden: account.hidden,
+      balance: account.balance, currency: account.currency, prices: account.prices, safeAmount: account.safeAmount, dashboardUrl: account.dashboardUrl, hidden: account.hidden,
       pet: data.petAccountId === account.id };
   }
   publicList() {
@@ -385,6 +393,7 @@ export class AccountStore {
     if (patch.name !== undefined) next.name = text(patch.name, 40) || current.name;
     if (patch.currency !== undefined) next.currency = patch.currency;
     if (patch.prices !== undefined) next.prices = patch.prices;
+    if (patch.safeAmount !== undefined) next.safeAmount = patch.safeAmount;
     if (patch.balance !== undefined) next.balance = { ...current.balance, ...patch.balance };
     if (patch.codexProviders !== undefined) next.codexProviders = patch.codexProviders;
     if (patch.hidden !== undefined) next.hidden = patch.hidden === true;

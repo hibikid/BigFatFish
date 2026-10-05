@@ -223,6 +223,15 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
       [...form.querySelectorAll('button')].find(button => button.textContent === '保存并查询').click(); })()`);
     await until("[...document.querySelectorAll('.quota-card')].some(card => card.textContent.includes('DeepSeek') && card.textContent.includes('密钥已存入钥匙串') && card.textContent.includes('余额'))", 'the added account did not show its balance');
     assert.ok(!(await js("document.getElementById('quota-manager').innerHTML")).includes('synthetic-chat-key'), 'the manager never shows a key');
+    await js(`(() => { const card = [...document.querySelectorAll('.quota-card')].find(card => card.querySelector('strong')?.textContent === 'DeepSeek');
+      [...card.querySelectorAll('button')].find(button => button.textContent === '编辑').click(); })()`);
+    await until("!!document.querySelector('.quota-edit [name=safeAmount]')", 'the account editor did not open');
+    await js(`(() => { const form = document.querySelector('.quota-edit'); form.querySelector('[name=safeAmount]').value = '220';
+      [...form.querySelectorAll('button')].find(button => button.textContent === '保存').click(); })()`);
+    await until("!document.querySelector('.quota-edit') && [...document.querySelectorAll('.quota-card')].some(card => card.textContent.includes('安全额度'))", 'the safe amount did not show on the account');
+    const safe = dispatcher.book.snapshot().accounts.find(account => account.name === 'DeepSeek');
+    assert.deepEqual([safe.balance.full, safe.balance.safe], [220, 220], 'the balance counts against the safe amount');
+    passed.push('an API account\'s safe amount is set in its editor and counts as its full bar');
     await js("[...document.querySelectorAll('.quota-card[data-account-id=claude] button')].find(button => button.textContent === '接入 Claude Code').click()");
     await until("document.querySelector('.quota-card[data-account-id=claude]').textContent.includes('已接入 Claude Code')", 'connecting Claude Code did not show as connected');
     assert.match(fs.readFileSync(path.join(dataDir, 'claude-home', 'settings.json'), 'utf8'), /claude-statusline\.mjs/, 'Claude Code was connected in the test folder');
