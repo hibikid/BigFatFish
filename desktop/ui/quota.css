@@ -10,6 +10,7 @@
 .dshwv-meter-bars:empty{display:none}
 .dshwv-meter-row{display:flex;align-items:center;gap:4px}
 .dshwv-meter-row span{min-width:1.4em}
+.dshwv-meter-row .dshwv-meter-value{flex:none;min-width:0;white-space:nowrap;font-variant-numeric:tabular-nums}
 .dshwv-meter-track{flex:1;height:var(--dshw-meter-bar,5px);border-radius:4px;background:rgba(255,255,255,.8);box-shadow:inset 0 0 0 1px rgba(47,85,86,.35);overflow:hidden}
 .dshwv-meter-fill{height:100%;border-radius:4px;background:#3fb68b}
 .dshwv-meter-warn .dshwv-meter-fill{background:#e0a32e}

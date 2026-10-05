@@ -27,6 +27,9 @@ export function createQuotaView({ root, pet, presentation, money, rendering, geo
   document.body.append(panel);
   const edges = new WeakMap();
   let snapshot = null, barsKey = '';
+  // Without an exchange rate an amount stays in its own currency rather than showing nothing.
+  const format = (amount, currency) => money.convert(amount, currency) === null ?
+    (currency === 'CNY' ? '¥' : currency === 'USD' ? '$' : currency + ' ') + amount.toFixed(2) : money.formatMoney(amount, currency);
 
   function meterRow(meter) {
     const row = element('div', 'dshwv-meter-row dshwv-meter-' + meter.level), track = element('div', 'dshwv-meter-track');
@@ -34,6 +37,7 @@ export function createQuotaView({ root, pet, presentation, money, rendering, geo
     fill.style.width = meter.percent + '%';
     track.append(fill);
     row.append(element('span', '', meter.label), track);
+    if (meter.value) row.append(element('span', 'dshwv-meter-value', meter.value));
     return row;
   }
   function renderMeter() {
@@ -43,7 +47,8 @@ export function createQuotaView({ root, pet, presentation, money, rendering, geo
     name.textContent = account.name;
     head.title = presentation.title(account) + ' · 查看全部额度';
     head.setAttribute('aria-label', presentation.title(account) + '，查看全部额度');
-    const meters = presentation.meters(account), key = JSON.stringify(meters);
+    // A subscription shows the share left; an API account, the money left.
+    const meters = presentation.meters(account, { formatMoney: format }), key = JSON.stringify(meters);
     if (key !== barsKey) { barsKey = key; bars.replaceChildren(...meters.map(meterRow)); }
     place();
   }
@@ -86,9 +91,7 @@ export function createQuotaView({ root, pet, presentation, money, rendering, geo
     return row;
   }
   function renderPanel() {
-    const time = now(), format = (amount, currency) => money.convert(amount, currency) === null ?
-      // Without an exchange rate an amount stays in its own currency rather than showing nothing.
-      (currency === 'CNY' ? '¥' : currency === 'USD' ? '$' : currency + ' ') + amount.toFixed(2) : money.formatMoney(amount, currency);
+    const time = now();
     const header = element('header', 'quota-overview-head');
     header.append(element('strong', '', '全部额度'), button('', '×', close));
     header.lastChild.setAttribute('aria-label', '收起');
@@ -148,7 +151,10 @@ export function createQuotaView({ root, pet, presentation, money, rendering, geo
     if (!panel.hidden && !panel.contains(event.target) && !head.contains(event.target)) close();
   }, true);
   document.addEventListener('keydown', event => { if (event.key === 'Escape') close(); });
-  money.onChange(() => { if (!panel.hidden) { renderPanel(); placePanel(); } });
+  money.onChange(() => {
+    renderMeter();
+    if (!panel.hidden) { renderPanel(); placePanel(); }
+  });
 
   return Object.freeze({
     update(next) {

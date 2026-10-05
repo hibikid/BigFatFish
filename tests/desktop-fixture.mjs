@@ -139,8 +139,9 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
   for (let i = 0; !window.isVisible() && i < 150; i++) await delay(100);
   assert.ok(window.isVisible(), 'free desktop should be visible without a Codex window');
   await js('window.__whaleRenderTest.place(300, 300, false)');
-  const meterRows = "[...document.querySelectorAll('.dshwv-meter:not([hidden]) .dshwv-meter-row')].map(row => row.textContent + ':' + row.querySelector('.dshwv-meter-fill').style.width)";
-  await until(`JSON.stringify(${meterRows}) === '["余额:100%"]'`, 'the API balance meter is not full at the first balance seen');
+  // Each bar as label:fill:value — a subscription shows the share left, an API account the money left.
+  const meterRows = "[...document.querySelectorAll('.dshwv-meter:not([hidden]) .dshwv-meter-row')].map(row => row.querySelector('span').textContent + ':' + row.querySelector('.dshwv-meter-fill').style.width + ':' + (row.querySelector('.dshwv-meter-value')?.textContent || ''))";
+  await until(`JSON.stringify(${meterRows}) === '["余额:100%:$12.35"]'`, 'the API balance meter is not full at the first balance seen, with the balance left');
   assert.ok(await js("document.querySelector('.dshwv-meter').getBoundingClientRect().top >= document.querySelector('.dshwv-img').getBoundingClientRect().bottom - 1"), 'the meter must sit under the pet');
   // The default role's visible bottom edge runs from 17% of its image box to the right edge.
   await until("(() => { const m = document.querySelector('.dshwv-meter').getBoundingClientRect(), i = document.querySelector('.dshwv-img').getBoundingClientRect(); return Math.abs(m.right - i.right) <= 1.5 && Math.abs(m.left - (i.left + 0.17 * i.width)) <= 2; })()", 'the meter must span the pet\'s bottom edge');
@@ -422,7 +423,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     dispatcher.book.codexTurn({ ts: now, subscription: true });
     await js('window.__whaleRenderTest.refresh(true)');
     await until("document.querySelector('.dshwv-root').title.includes('Codex 订阅') && window.__whaleRenderTest.status().account === 'codex'", 'subscription did not replace API display');
-    await until(`JSON.stringify(${meterRows}) === '["5h:75%","7d:40%"]'`, 'the meter did not switch to the 5h and 7d quota');
+    await until(`JSON.stringify(${meterRows}) === '["5h:75%:75%","7d:40%:40%"]'`, 'the meter did not switch to the 5h and 7d quota, with the share left');
     assert.equal(await js("document.querySelector('.dshwv-meter-name').textContent"), 'Codex', 'the meter names the account in use');
     passed.push('the usage meter shows remaining 5h and 7d quota for a subscription and names it');
     saveClaudeUsage(dataDir, { rate_limits: { five_hour: { used_percentage: 20, resets_at: Math.floor(now / 1000) + 3600 },

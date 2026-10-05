@@ -31,7 +31,9 @@ test('accounts are named by what they are and what uses them', () => {
 });
 
 test('the bars under the pet show each valid window, an API quota, or the balance against its full value', () => {
-  assert.deepEqual(plain(presentation.meters(codex)), [{ label: '7d', percent: 40, level: 'warn' }], 'a window that reset has no bar');
+  assert.deepEqual(plain(presentation.meters(codex)), [{ label: '7d', percent: 40, level: 'warn', value: '40%' }], 'a window that reset has no bar; a subscription shows the share left');
+  assert.deepEqual(plain(presentation.meters(labkey, { formatMoney: money })), [{ label: '额度', percent: 41.29, level: 'warn', value: '$165.16' }], 'an API quota shows the money left');
+  assert.deepEqual(plain(presentation.meters(deepseek, { formatMoney: money })), [{ label: '余额', percent: 98.38, level: 'ok', value: '¥49.19' }], 'a balance shows the balance');
   assert.deepEqual(plain(presentation.meters(labkey)), [{ label: '额度', percent: 41.29, level: 'warn' }]);
   assert.deepEqual(plain(presentation.meters(deepseek)), [{ label: '余额', percent: 98.38, level: 'ok' }]);
   assert.deepEqual(plain(presentation.meters({ ...deepseek, balance: { amount: 4, currency: 'CNY', full: null } })), [], 'no full balance, no bar');

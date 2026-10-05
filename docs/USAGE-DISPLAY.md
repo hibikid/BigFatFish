@@ -34,7 +34,7 @@
 
 - `current(snapshot)`：当前额度的账户。
 - `title(account)` / `label(account)`：如“Codex 订阅 · Plus”“labkey · Codex API”“DeepSeek · 大肥鱼”；气泡标题如“Codex 订阅额度”“labkey 额度”“DeepSeek 余额”。
-- `meters(account)`：进度条，每条是标签、剩余百分比（0–100）和档位（≥50% 正常、20–50% 偏少、<20% 告急）。订阅给出每个有效窗口；API 有额度上限时给第一条上限，否则给余额占满格的比例；不限额或没有满格时为空。
+- `meters(account, { formatMoney })`：进度条，每条是标签、剩余百分比（0–100）、档位（≥50% 正常、20–50% 偏少、<20% 告急）和条形右边的数值：订阅写剩余百分比，API 账户写剩余的额度或余额。订阅给出每个有效窗口；API 有额度上限时给第一条上限，否则给余额占满格的比例；不限额或没有满格时为空。
 - `rows(account, { formatMoney, now })`：浮层里每一行的条形、剩余与重置时间；重置时间说成“14:20”“明天 9:05”“周五 10:00”或“10月12日 0:00”。
 - `paceText(account, options)`：今日消费与消耗速度的一句话；`today: false` 时不提今日（记录页另有今日金额）。
 - `status(account)`：暂时没有数据的原因或查询错误。

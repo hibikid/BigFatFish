@@ -48,19 +48,21 @@
     if (account.type === 'subscription') return account.name + ' 订阅额度';
     return account.name + (account.windows.length ? ' 额度' : ' 余额');
   }
-  function meter(name, percent) {
-    const value = clamp(percent);
-    return { label: name, percent: value, level: level(value) };
+  function meter(name, percent, value) {
+    const share = clamp(percent);
+    return { label: name, percent: share, level: level(share), ...(value === undefined ? {} : { value }) };
   }
-  // The bars under the pet: each valid subscription window, an API account's
-  // first quota, or what is left of its balance against the full balance.
-  function meters(account) {
+  // The bars under the pet: each valid subscription window with the share
+  // left, or an API account's first quota or its balance against the full
+  // balance, with the amount left in money when a formatter is given.
+  function meters(account, { formatMoney } = {}) {
     if (!account) return [];
+    const money = (amount, currency) => formatMoney ? formatMoney(amount, currency) : undefined;
     const windows = account.windows.filter(window => !window.reset && finite(window.remainingPercent));
-    if (account.type === 'subscription') return windows.map(window => meter(window.label, window.remainingPercent));
-    if (windows.length) return [meter(windows[0].label, windows[0].remainingPercent)];
+    if (account.type === 'subscription') return windows.map(window => meter(window.label, window.remainingPercent, Math.round(window.remainingPercent) + '%'));
+    if (windows.length) return [meter(windows[0].label, windows[0].remainingPercent, money(windows[0].remaining, windows[0].currency))];
     const balance = account.balance;
-    return balance && !balance.unlimited && finite(balance.amount) && balance.full > 0 ? [meter('余额', balance.amount / balance.full * 100)] : [];
+    return balance && !balance.unlimited && finite(balance.amount) && balance.full > 0 ? [meter('余额', balance.amount / balance.full * 100, money(balance.amount, balance.currency))] : [];
   }
   // One line per quota in the overview: its bar, what is left and when it resets.
   function rows(account, { formatMoney, now = Date.now() }) {
