@@ -260,6 +260,14 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
     await until("document.getElementById('chat-output').textContent.includes('第二行回复') && document.getElementById('chat-stop').hidden", 'Enter did not stream reply');
     await until("document.querySelector('[data-chat-spent]').textContent.includes('约') && document.querySelector('[data-chat-balance]').textContent.endsWith(" + shown('109.5') + ")", 'chat cost and balance did not refresh after reply');
+    // Writing to the pet makes DeepSeek, a CNY account, the one in use; the USD account keeps its dollars.
+    const accountIds = Object.fromEntries(dispatcher.book.snapshot().accounts.map(account => [account.name, account.id]));
+    await js('window.__whaleRenderTest.refresh(false)');
+    await until(`window.__whaleRenderTest.status().account === ${JSON.stringify(accountIds.DeepSeek)}`, 'writing to the pet did not make its account current');
+    await js('window.__whaleQuotaTest.open()');
+    await until(`(document.querySelector('.quota-account[data-account-id=${accountIds.fixture}]')?.textContent || '').includes('$12.35')`, 'another account in use changed this account\'s currency');
+    await js('window.__whaleQuotaTest.close()');
+    passed.push('making a CNY account current leaves a USD account in dollars');
     const billed = JSON.parse((await dispatcher.dispatch('/api/chat/billing')).body).billing;
     assert.equal(billed.recorded, 1); assert.ok(billed.min > 0); assert.equal(billed.unknown, 0);
     await capture('chat-short-reply');

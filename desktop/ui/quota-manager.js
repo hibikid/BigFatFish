@@ -395,11 +395,11 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
   });
 
   currency.addEventListener('change', () => run(async () => {
-    await money.setDisplayCurrency(currency.value);
+    await money.setDisplayCurrency(currency.value || null);
     render(); onChanged();
   }, currency));
   // A new display currency redraws the amounts, but never a form being filled in.
-  money.onChange(state => { currency.value = state.displayCurrency; if (dialog.open && tab !== 'alerts') render(); });
+  money.onChange(state => { currency.value = state.preferredCurrency || ''; if (dialog.open && tab !== 'alerts') render(); });
   dialog.querySelector('[data-quota-close]').addEventListener('click', () => dialog.close());
   return Object.freeze({
     async open({ tab: page = 'accounts' } = {}) {

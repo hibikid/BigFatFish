@@ -835,7 +835,7 @@
     var currencySel = document.createElement('select');
     currencySel.id = 'dshw-display-currency';
     currencySel.className = 'dshwv-sound';
-    [['USD', '美元 USD'], ['CNY', '人民币 CNY']].forEach(function (entry) {
+    [['', '原币种'], ['USD', '美元 USD'], ['CNY', '人民币 CNY']].forEach(function (entry) {
       var option = document.createElement('option');
       option.value = entry[0]; option.textContent = entry[1]; currencySel.appendChild(option);
     });
@@ -947,8 +947,7 @@
     });
     setInterval(updateFxButton, 1000);
     WhaleMoney.onChange(function (moneyState) {
-      currencySel.value = moneyState.displayCurrency;
-      currencySel.disabled = ['USD', 'CNY'].indexOf(moneyState.nativeCurrency) < 0;
+      currencySel.value = moneyState.preferredCurrency || '';
       currencyDrop.refresh();
       var fx = moneyState.quote;
       var latest = moneyState.latestQuote || fx;
@@ -969,10 +968,10 @@
     });
     currencySel.addEventListener('change', function () {
       var next = currencySel.value;
-      currencySel.value = WhaleMoney.state().displayCurrency;
+      currencySel.value = WhaleMoney.state().preferredCurrency || '';
       currencyDrop.refresh();
       closeFxInfo();
-      WhaleMoney.setDisplayCurrency(next).catch(function () {});
+      WhaleMoney.setDisplayCurrency(next || null).catch(function () {});
     });
     menuBox.appendChild(menuSep1);
     menuBox.appendChild(row9);
@@ -7672,7 +7671,6 @@
       if (key === quotaKey) return;
       quotaKey = key;
       Object.assign(state, WhaleQuotaPresentation.bubbleState(account));
-      if (account && account.type === 'api' && state.currency) WhaleMoney.setNativeCurrency(state.currency);
       var note = account ? WhaleQuotaPresentation.status(account) : '';
       root.title = account ? WhaleQuotaPresentation.title(account) + (note ? ' · ' + note : '') : '额度';
       img.alt = WhaleQuotaPresentation.label(account);
