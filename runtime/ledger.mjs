@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { readJson, writeJson, dayKey, rounded } from './paths.mjs';
 
@@ -6,13 +5,6 @@ const initialLedger = () => ({ version: 1, date: '', observed: 0, firstObservati
 // The full balance is the highest balance since the last top-up. A rise of more
 // than this share of it counts as a top-up; a smaller one, such as a refund, does not.
 const TOP_UP_SHARE = 0.01;
-const emptySessionSummary = () => ({ tokens: 0, turns: 0, amounts: new Map() });
-const addAmount = (summary, currency, value) => {
-  if (!/^[A-Z]{3}$/.test(currency || '') || !Number.isFinite(value)) return;
-  summary.amounts.set(currency, rounded((summary.amounts.get(currency) || 0) + value));
-};
-const publicSessionSummary = summary => ({ tokens: Math.max(0, Math.floor(summary.tokens)), turns: summary.turns,
-  amounts: [...summary.amounts].map(([currency, total]) => ({ currency, total: rounded(total) })).sort((a, b) => a.currency.localeCompare(b.currency)) });
 
 export class UsageLedger {
   constructor(dataDir) { this.dataDir = dataDir; }
@@ -102,62 +94,6 @@ export class UsageLedger {
         total: rounded(days.reduce((n, day) => n + (totalDay(day) || 0), 0)), totalComplete: missingSummaryDays.length === 0,
         missingSummaryDays, events: led.events.slice(-500).reverse(), storedEventCount: led.events.length, detailLimit: 500 },
       usageSource: 'observed-api-debits', note: '每日合计来自同密钥累计消耗或余额差值；停机或跨午夜的观测间隔归入再次观测日，不能拆成精确逐请求账单。日汇总长期保留，明细最多保留 8000 条、页面提供最近 500 条。旧版已删除的日汇总显示未知，不冒充零消费；模型金额为配置价格估算。' };
-  }
-  recordsAll(sourceInfo = [], now = Date.now()) {
-    const sourceNames = new Map([['default', '当前 API']]);
-    for (const item of sourceInfo) if (item?.id && item?.name) sourceNames.set(item.id, item.name);
-    const today = dayKey(now), dayKeys = [];
-    for (let i = 0; i < 7; i++) { const d = new Date(now); d.setDate(d.getDate() - i); dayKeys.push(dayKey(d)); }
-    const daySet = new Set(dayKeys), overall = { today: emptySessionSummary(), total7: emptySessionSummary(), all: emptySessionSummary() };
-    const bySource = new Map(), observed = new Map(), seenEvents = new Set();
-    const sourceSummary = id => {
-      if (!bySource.has(id)) bySource.set(id, { id, name: sourceNames.get(id) || '历史未标记 API', today: emptySessionSummary(), total7: emptySessionSummary(), all: emptySessionSummary() });
-      return bySource.get(id);
-    };
-    const addEvent = (summary, event) => {
-      const tokens = Number(event.tokens);
-      summary.turns += 1;
-      if (Number.isFinite(tokens) && tokens >= 0) summary.tokens += Math.floor(tokens);
-      const cost = Number(event.cost ?? event.amount);
-      if (Number.isFinite(cost) && !['unknown', 'pending'].includes(event.costState)) addAmount(summary, event.currency, cost);
-    };
-    const addObserved = (currency, period, value) => {
-      if (!Number.isFinite(value)) return;
-      const row = observed.get(currency) || { currency, today: 0, total7: 0, all: 0, knownDays: 0, totalDays: 0 };
-      row[period] = rounded(row[period] + value); observed.set(currency, row);
-    };
-    let files = [];
-    try { files = fs.readdirSync(path.join(this.dataDir, 'ledgers'), { withFileTypes: true }).filter(entry => entry.isFile() && /^[a-f0-9]{24}-[A-Z]{3}\.json$/.test(entry.name)).map(entry => entry.name); }
-    catch {}
-    for (const name of files) {
-      const scope = name.slice(0, -5);
-      let records, ledger;
-      try { ledger = this.load(scope); records = this.records(scope, now); } catch { continue; }
-      const currency = scope.slice(-3);
-      const observedDays = new Map((records.all?.days || []).map(row => [row.date, row]));
-      for (const [date, row] of observedDays) {
-        if (row?.totalState !== 'observed' || !Number.isFinite(row.total)) continue;
-        addObserved(currency, 'all', row.total);
-        if (daySet.has(date)) addObserved(currency, 'total7', row.total);
-        if (date === today) addObserved(currency, 'today', row.total);
-      }
-      for (const event of ledger.events || []) {
-        if (event?.isSubagent || !event?.id || seenEvents.has(event.id)) continue;
-        seenEvents.add(event.id);
-        const id = typeof event.sourceId === 'string' && sourceNames.has(event.sourceId) ? event.sourceId :
-          typeof event.sourceId === 'string' && /^[a-z][a-z0-9_-]{0,63}$/.test(event.sourceId) ? event.sourceId : 'legacy-' + scope.slice(0, 8);
-        const source = sourceSummary(id);
-        if (event.sourceName && id !== 'default') source.name = String(event.sourceName).slice(0, 40);
-        addEvent(source.all, event); addEvent(overall.all, event);
-        if (daySet.has(event.day)) { addEvent(source.total7, event); addEvent(overall.total7, event); }
-        if (event.day === today) { addEvent(source.today, event); addEvent(overall.today, event); }
-      }
-    }
-    for (const item of sourceInfo) if (item?.id) sourceSummary(item.id);
-    return { ok: true, today: publicSessionSummary(overall.today), total7: publicSessionSummary(overall.total7), all: publicSessionSummary(overall.all),
-      sources: [...bySource.values()].map(row => ({ id: row.id, name: row.name, today: publicSessionSummary(row.today), total7: publicSessionSummary(row.total7), all: publicSessionSummary(row.all) })).sort((a, b) => a.name.localeCompare(b.name)),
-      observed: [...observed.values()].sort((a, b) => a.currency.localeCompare(b.currency)),
-      note: '总 Token 只统计主会话；子任务已计入所属主会话，避免重复累计。金额按币种分开显示：会话金额来自已知估算或期间扣费，观测金额来自各 API 余额表的累计变化。' };
   }
 }
 

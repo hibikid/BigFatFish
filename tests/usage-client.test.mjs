@@ -92,7 +92,7 @@ test('Claude completion polls once, ignores old events and never replays after a
   assert.deepEqual(shown, ['new']);
 });
 
-test('records and sound settings use the existing routes and report a rejected save', async () => {
+test('sound settings use the existing route and report a rejected save', async () => {
   const calls = [];
   let saved = { approvalSound: { on: false, sel: 'frag:custom' } }, reject = false;
   const client = create({ fetchImpl: async (url, options) => {
@@ -101,15 +101,14 @@ test('records and sound settings use the existing routes and report a rejected s
       if (reject) return Response.json({ ok: false, error: 'save failed' });
       saved = JSON.parse(options.body);
     }
-    return Response.json(url.includes('records') ? { ok: true, today: { total: 0.5 } } : { ok: true, settings: saved });
+    return Response.json({ ok: true, settings: saved });
   } });
-  assert.equal((await client.records()).today.total, 0.5);
   assert.equal((await client.settings()).settings.approvalSound.sel, 'frag:custom');
   const patch = { approvalSound: { on: true, sel: 'preset:fx1:release' } };
   assert.equal((await client.saveSettings(patch)).settings.approvalSound.on, true);
-  assert.equal(calls[2][0], '/dsh-whale/usage-settings.json');
-  assert.equal(calls[2][1].headers['Content-Type'], 'application/json');
-  assert.deepEqual(JSON.parse(calls[2][1].body), patch);
+  assert.equal(calls[1][0], '/dsh-whale/usage-settings.json');
+  assert.equal(calls[1][1].headers['Content-Type'], 'application/json');
+  assert.deepEqual(JSON.parse(calls[1][1].body), patch);
   reject = true;
   await assert.rejects(client.saveSettings(patch), /save failed/);
 });

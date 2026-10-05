@@ -87,7 +87,6 @@
         pollClaudeCompletion().then(({ record, fresh }) => { if (fresh) claude(record); }),
       ]).then(() => undefined);
     }
-    const records = () => request('/dsh-whale/usage-records.json');
     const settings = () => request('/dsh-whale/usage-settings.json');
     function saveSettings(patch) {
       return request('/dsh-whale/usage-settings.json', { method: 'PUT', body: patch || {} }).then(result => {
@@ -95,7 +94,7 @@
         return result;
       });
     }
-    return Object.freeze({ quotas, select, migrateChoice, pollCompletions, records, settings, saveSettings });
+    return Object.freeze({ quotas, select, migrateChoice, pollCompletions, settings, saveSettings });
   }
   return Object.freeze({ create });
 });

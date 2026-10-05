@@ -20,12 +20,10 @@ test('main and late child turns aggregate once and stay isolated across sources'
   const personal = turn('personal', { input: 200, output: 40 });
   service.beginTurn(personal);
   await service.finishTurn(personal);
-  const records = service.usageRecords();
-  assert.equal(records.overall.all.tokens, 420);
-  assert.equal(records.overall.all.turns, 2);
-  assert.deepEqual(records.overall.all.amounts, [{ currency: 'USD', total: 0.49 }]);
-  assert.equal(records.overall.sources.find(source => source.name === 'Work').all.tokens, 180);
-  assert.equal(records.all.events.length, 1);
+  const turns = provider => service.ledger.load(service.accounts.sessionContext(provider).accountId + '-USD').events.filter(event => !event.isSubagent)
+    .map(event => [event.tokens, event.cost]);
+  assert.deepEqual(turns('work'), [[180, 0.21]], 'the late child joins its main turn once');
+  assert.deepEqual(turns('personal'), [[240, 0.28]], 'the other account keeps its own turn');
 });
 
 test('later shared-key debits never become the amount of a previously pending turn', async t => {
@@ -44,8 +42,8 @@ test('later shared-key debits never become the amount of a previously pending tu
   assert.deepEqual(restarted.prepareRecovery(), []);
   assert.equal(restarted.lastTurn().costState, 'unknown');
   assert.equal(restarted.lastTurn().amount, null);
-  assert.equal(restarted.usageRecords().overall.all.tokens, 120);
-  assert.deepEqual(restarted.usageRecords().overall.all.amounts, []);
+  const [event] = restarted.ledger.load(restarted.accounts.sessionContext('personal').accountId + '-USD').events;
+  assert.deepEqual([event.tokens, event.cost, event.costState], [120, null, 'unknown']);
 });
 
 test('interrupted turns recover tokens without replaying completion or duplicating records', async t => {
@@ -59,8 +57,7 @@ test('interrupted turns recover tokens without replaying completion or duplicati
   await restarted.finishTurn({ ...meta, historical: true, outcome: 'interrupted', notify: false });
   await restarted.finishTurn(meta);
   assert.equal(restarted.lastTurn().seq, 0);
-  assert.equal(restarted.usageRecords().overall.all.tokens, 120);
-  assert.equal(restarted.usageRecords().overall.all.turns, 1);
+  assert.deepEqual(restarted.ledger.load(restarted.accounts.sessionContext('work').accountId + '-USD').events.filter(event => !event.isSubagent).map(event => event.tokens), [120]);
   assert.deepEqual(createService().prepareRecovery(), []);
 });
 

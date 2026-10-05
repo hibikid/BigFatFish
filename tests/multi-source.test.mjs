@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ConfigStore } from '../runtime/config.mjs';
-import { UsageLedger } from '../runtime/ledger.mjs';
 import { SessionParser } from '../runtime/session-monitor.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-multi-source-'));
@@ -29,16 +28,7 @@ try {
   parser.accept({ type: 'event_msg', timestamp: Date.now(), payload: { type: 'task_started', turn_id: 'turn' } });
   assert.equal(starts[0].modelProvider, 'work');
 
-  const ledger = new UsageLedger(dataDir), now = Date.now();
-  ledger.append(source.accountId + '-USD', { id: 'work-root', ts: now, sourceId: 'work', sourceName: '工作中转站', tokens: 100, cost: 1.25, costState: 'estimated', currency: 'USD' });
-  ledger.append(source.accountId + '-USD', { id: 'work-child', ts: now, sourceId: 'work', sourceName: '工作中转站', isSubagent: true, tokens: 40, cost: 0.5, costState: 'estimated', currency: 'USD' });
-  ledger.append('aaaaaaaaaaaaaaaaaaaaaaaa-USD', { id: 'personal-root', ts: now, sourceId: 'default', sourceName: '当前 API', tokens: 200, cost: 2, costState: 'observed', currency: 'USD' });
-  const overall = ledger.recordsAll(store.sourcePublicInfo(), now);
-  assert.equal(overall.all.tokens, 300);
-  assert.deepEqual(overall.all.amounts, [{ currency: 'USD', total: 3.25 }]);
-  assert.equal(overall.sources.find(item => item.id === 'work').all.tokens, 100);
-  assert.equal(overall.sources.find(item => item.id === 'default').all.tokens, 200);
-  console.log('multi-source config, classification, and aggregate accounting passed');
+  console.log('multi-source config and session classification passed');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

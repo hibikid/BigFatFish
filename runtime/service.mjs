@@ -174,12 +174,6 @@ export class WhaleService {
       todayUsageSource: sourceDailyUsage === null ? 'ledger' : 'source-api', observedSince: records.today.since,
       usageMode: sourceDailyUsage === null ? 'ledger' : 'source-api', usageNote: records.note };
   }
-  usageRecords() {
-    const c = this.displayContext();
-    const scope = this.activeScope?.startsWith(c.accountId + '-') ? this.activeScope : this.scope(c, c.setting.currency);
-    return { ...this.ledger.records(scope), currency: scope.slice(-3), settings: this.readUsageSettings(),
-      overall: this.ledger.recordsAll(this.accounts.sourceNames()) };
-  }
   readUsageSettings() {
     const saved = readJson(this.usageSettingsFile, {});
     const defaults = usageDefaults();
