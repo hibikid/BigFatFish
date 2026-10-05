@@ -1,77 +1,64 @@
-# 用量请求与展示适配
+# 额度的请求与展示
 
-## 本次范围
-
-对应需求：先分离用量请求和显示适配，完成一个 commit。起点为 `c1a660a` / `codex-v0.2.5-baseline`。
-
-本次抽出前端用量请求与展示数据转换，保持现有 UI、后端协议、数据文件和原始金额精度。后端模块入口的拆分属于后续工作。
+挂件只显示额度簿给出的结果，口径见 [额度管理](QUOTA.md)。前端分三层：请求、纯展示和视图；主脚本 `assets/whale-widget.js` 只把当前额度接到气泡上。
 
 ## 模块职责
 
 | 文件 | 职责 |
 | --- | --- |
-| `desktop/ui/usage-client.js` | 用量来源：显示哪个来源及切换规则、各来源的路由与请求、余额刷新超时、完成事件游标与持久化 |
-| `desktop/ui/usage-presentation.js` | 余额与订阅显示状态、标题、额度文字、费用气泡文字的转换 |
-| `desktop/ui/turn-notice.js` | 已有任务结果快照、通知是否有效及开关规则 |
-| `assets/whale-widget.js` | 装配模块，把显示数据应用到现有 DOM、气泡、音效与金额绑定；不保存来源状态 |
+| `desktop/ui/usage-client.js` | 读额度簿、把“设为当前”交回额度簿、读两路完成事件并去重、读写音效设置；第一次运行时迁移旧版在页面里保存的来源选择 |
+| `desktop/ui/quota-presentation.js` | 额度的文字与进度条：账户标题、进度条、浮层每一行、消耗速度、暂时没有数据的原因，以及给气泡用的状态 |
+| `desktop/ui/quota-view.js` | 挂件下方的进度条（账户名、条形、▾）和 ▾ 展开的全部额度 |
+| `desktop/ui/quota-manager.js` | 额度管理窗口：账户、记录、提醒 |
+| `desktop/ui/usage-presentation.js` | 气泡里的额度与花费文字：订阅剩余几行、余额与今日消费、每轮花费 |
+| `desktop/ui/turn-notice.js` | 完成事件的快照，以及是否提示 |
+| `assets/whale-widget.js` | 每 10 秒和每次完成事件后读一次额度簿，把当前额度交给气泡和视图，弹出新的额度提醒 |
 
-请求模块不访问 DOM、Electron 或全局存储。创建时注入 `fetchImpl`、存储和现有的订阅判定 / 通知判定函数。展示适配是纯函数，不发请求、不操作 DOM，不访问存储；金额格式化通过 `formatMoney` 注入，继续使用现有 `WhaleMoney` 换算与绑定。
+请求模块不碰 DOM；展示模块是纯函数，不发请求、不访问存储，金额格式化由调用方传入（`WhaleMoney`，没有汇率时按账户自己的币种）。
 
 ## 请求接口
 
-`WhaleUsageClient.create({ fetchImpl, acceptsSubscription, shouldNotify, storage, now?, timeoutMs?, onSource? })` 返回：
+`WhaleUsageClient.create({ fetchImpl, shouldNotify, storage, now?, timeoutMs? })` 返回：
 
-- `source()` / `select(source)`：当前显示的来源（`codex` 或 `claude`）；`select` 是菜单里的手动选择。
-- `overview({ manual?, getSubscription?, onBalanceFallback? })`：刷新当前来源。Codex 先读取订阅快照，可用时返回 `kind: 'subscription'`；读取临时失败时调用 `getSubscription()`，已有可用快照则返回 `kind: 'retained-subscription'`；否则查询 API，返回 `kind: 'balance'`。Claude 只读取自己的额度，返回 `subscription` 或 `missing`，从不回退到 API 余额。
-- `pollQuota()`：原有 5 秒本地轮询，只读取当前来源的额度，返回 `subscription` 或 `missing`。
-- `pollCompletions({ codex, claude })`：读取两个来源的完成事件，每条新的完成事件只交给对应来源的回调一次。并发读取期间后来的调用不消费完成事件；已读及启动前的完成事件不重复提示。
-- `records()`：读取用量记录。
-- `settings()` / `saveSettings(patch)`：读取及保存用量、音效设置；保存失败拒绝 Promise。
+- `quotas({ manual })`：读 `/api/quotas`。同时发起的读取共用一次请求；`manual` 先让后台重新查询所有 API 账户。受 25 秒超时约束，回答无效时报错。
+- `select(id, at?)`：设为当前，交给 `/api/quotas/current`。
+- `migrateChoice()`：旧版在页面里保存的手动选择（`dshw-display-source` 与 `dshw-display-source-manual-at`）带着原来的时间交给额度簿，只迁一次；旧键保留，回退到旧版仍可用。
+- `pollCompletions({ codex, claude })`：读两路完成事件，每条只交给对应的回调一次；并发读取不重复消费，启动前与已读的不再提示。
+- `settings()` / `saveSettings(patch)`：读写音效与提醒设置，保存失败时拒绝。
 
-`overview` 和 `pollQuota` 的结果都带 `source`。读取期间来源已切换时结果为 `null`，失败也不再抛出，界面无须自己比对来源；`onBalanceFallback()` 同样只在来源未变时调用。
-
-**来源选择。** 显示最近有活动的来源：Codex 或 Claude 的完成事件都算活动；启动时 Claude 额度快照的采样时间也算一次 Claude 活动。菜单手动选择会一直保持（重载后也保持），直到出现比选择时间更晚的活动。来源变化时调用 `onSource(source)`，界面清空旧的显示数据并刷新。
-
-余额刷新的一轮订阅 / API 请求共用原有 25 秒超时，Claude 来源的刷新也受同一超时约束。API 请求发出前调用 `onBalanceFallback()`，由界面清除旧订阅模式。读取结束后不再清除订阅，避免覆盖期间独立轮询收到的新快照。订阅快照读取临时失败时检查最新显示状态，保留已有模式。
-
-存储键保持不变：`dshw-display-source`、`dshw-display-source-manual-at`、`dshw-last-seq`、`dshw-last-turn-id`、`dshw-last-claude-turn-id`。游标读取及写入失败不影响当前进程的通知去重。现有 URL、手动 `?refresh=1` 参数及 `no-store` 语义保持不变。
+游标键不变：`dshw-last-seq`、`dshw-last-turn-id`、`dshw-last-claude-turn-id`。
 
 ## 展示接口
 
-`WhaleUsagePresentation` 提供：
+`WhaleQuotaPresentation`：
 
-- `balance(data)` / `subscription(data)`：返回显示状态补丁 `state`、窗口提示 `title` 和图片描述 `alt`；无效订阅返回 `null`。
-- `hasBalance` / `hasSubscription` / `subscriptionFingerprint`：沿用已有的显示判定与变化判定。
-- `quotaLines(data)`：返回 5 小时、7 天剩余和 5 小时重置时间文字。
-- `balanceBubble(snapshot, { firstSubscriptionQuota, formatMoney })`：返回普通气泡的金额与提示文字。
-- `balanceRow(snapshot, type, options)`：转换自定义气泡中的余额 / 今日用量行，与普通气泡共用金额和今日用量文字。
-- `taskBubble(notice, formatMoney)`：返回订阅或费用气泡的内容；保留待记账、未知、零金额和估算的区别。
-- `usageMeters(state)`：返回角色下方进度条，每条是标签、剩余百分比（0–100）和档位（≥50% 正常、20–50% 偏少、<20% 告急）。订阅额度按已知窗口给出 5h、7d 两条；API 给出一条“余额”：有密钥额度上限时按剩余 ÷ 上限，否则按余额 ÷ 满格余额。不限额、加载中、出错或还没有满格余额时不显示。
+- `current(snapshot)`：当前额度的账户。
+- `title(account)` / `label(account)`：如“Codex 订阅 · Plus”“labkey · Codex API”“DeepSeek · 大肥鱼”；气泡标题如“Codex 订阅额度”“labkey 额度”“DeepSeek 余额”。
+- `meters(account)`：进度条，每条是标签、剩余百分比（0–100）和档位（≥50% 正常、20–50% 偏少、<20% 告急）。订阅给出每个有效窗口；API 有额度上限时给第一条上限，否则给余额占满格的比例；不限额或没有满格时为空。
+- `rows(account, { formatMoney, now })`：浮层里每一行的条形、剩余与重置时间；重置时间说成“14:20”“明天 9:05”“周五 10:00”或“10月12日 0:00”。
+- `paceText(account, options)`：今日消费与消耗速度的一句话；`today: false` 时不提今日（记录页另有今日金额）。
+- `status(account)`：暂时没有数据的原因或查询错误。
+- `overview(snapshot)`：浮层列出的账户——有数据的、有问题的，以及当前的。
+- `bubbleState(account)`：给气泡用的旧状态字段（订阅窗口、余额、今日消费、币种）。
 
-函数返回数据，不修改输入。鲸鱼界面决定渲染时机、样式、队列和播放音效。
+## 视图
 
-满格余额由后台账本按账户和币种记录：第一次观测到的余额为满格；之后余额超过满格，或者比上一次观测上涨超过满格的 1%（视为充值）时，以当时的余额为新满格。退款等小幅上涨不改变满格，换了计量方式会重新开始。余额接口的结果里以 `balanceFull` 提供。进度条放在白色底板上，宽度与角色可见部分的底边一致，紧贴在底边下方，跟随拖动、翻转和缩放；角色贴近屏幕底边时改到底边上方。底边由点击检测用的透明度蒙版量出（`desktop/ui/pet-geometry.js`）：取最低一段不透明像素的左右范围，若不到角色整体宽度的一半，则改用整体宽度；位置和字号取整到像素，避免文字发虚。会话输入框和番茄钟标签会避开进度条。已有气泡继续使用打开时的数据快照；金额绑定可以按原有机制更新显示币种。
+进度条放在白色底板上，第一行是当前额度的账户名和 ▾，下面是条形。宽度与角色可见部分的底边一致，紧贴在底边下方，跟随拖动、翻转和缩放；角色贴近屏幕底边时改到底边上方。底边由点击检测用的透明度蒙版量出（`desktop/ui/pet-geometry.js`）。点 ▾ 打开全部额度，放在角色旁边放得下的位置；点外面或按 Esc 收起。
 
-## 验收
+页面内事件：
 
-- 订阅优先、API 回退与临时失败保留快照保持原行为。
-- 手动刷新、超时后恢复、设置保存失败通过请求接口验证。
-- 金额不提前取整，配额不转换成金额；待记账和未知金额不显示为零。
-- 完成通知每条只消费一次，重启后不重播；现有审批提醒行为保持。
-- 真实 Electron 验证新脚本加载、订阅 / API 显示切换及任务结果气泡。
+| 事件 | 方向 | 作用 |
+| --- | --- | --- |
+| `whale-quotas` | 主脚本 → 视图 | 每次读到额度簿的快照 |
+| `whale-quotas-request` | 视图 → 主脚本 | 视图启动晚于第一次读取时，要最近的快照 |
+| `whale-quotas-changed` | 视图、额度管理 → 主脚本 | 设为当前或账户改动后立即重读 |
+| `whale-pet-layout` | 主脚本 → 视图 | 角色移动、翻转、缩放或换图后重新摆放 |
+| `whale-open-settings` | 菜单、托盘、浮层 → 额度管理 | 打开额度管理，`detail.tab` 指定页面 |
+| `whale-notice-settings`、`-request`、`-state` | 额度管理 ↔ 主脚本 | 完成提示的开关、停留秒数与失败 / 取消提示 |
 
-验证入口：`npm test`、`npm run check`、`npm run test:desktop`。桌面测试使用独立临时目录，结果与截图保存到被忽略的 `qa-output/`。
+## 验证
 
-## 验证结果
-
-2026-09-26，macOS 15.6 / Node 24.19.0 / Electron 44.3.0：
-
-- 全部 29 项行为测试通过，包含本次新增的 11 项请求与展示测试。
-- 67 个 JavaScript 文件及版本、空白、macOS 启动脚本和 plist 检查通过。
-- Electron 初次启动及完整进程重启通过，渲染进程错误为空。验证额度 / API 切换、待记账费用气泡，以及原有审批持久提醒、点击关闭、静音和自定义音效。
-- Standards 与 Spec 两项复查通过。API 回退时序与自定义气泡文字重复问题已修复，并由回归测试覆盖。
-
-本地报告与截图：`qa-output/desktop-0.2.5-fQa3n4/`，不提交生成文件。Windows 桌面尚未实测。
+`npm test`、`npm run check`、`npm run test:desktop`。桌面测试在独立临时目录里用合成数据，覆盖进度条的账户名与位置、▾ 浮层与“设为当前”、额度管理的三页、额度提醒气泡，以及会话通过额度管理添加的账户发消息。结果与截图保存在被忽略的 `qa-output/`。
 
 ## 订阅气泡复核
 
