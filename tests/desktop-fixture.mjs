@@ -143,6 +143,11 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
   await until('window.__whaleRenderTest.status().balance === 12.3456', 'balance did not load');
   for (let i = 0; !window.isVisible() && i < 150; i++) await delay(100);
   assert.ok(window.isVisible(), 'free desktop should be visible without a Codex window');
+  if (phase === 'restart') {
+    // The first run ends with the pet dragged to the top of the screen.
+    await until("Math.abs(document.querySelector('.dshwv-img').getBoundingClientRect().top) < 1 && document.querySelector('.dshwv-root').classList.contains('dshwv-beside')", 'the pet left at the top did not come back there');
+    passed.push('a pet left at the top of the screen comes back there after a restart');
+  }
   await js('window.__whaleRenderTest.place(300, 300, false)');
   // Each bar as label:fill:value — a subscription shows the share left, an API account the money left.
   const meterRows = "[...document.querySelectorAll('.dshwv-meter:not([hidden]) .dshwv-meter-row')].map(row => row.querySelector('span').textContent + ':' + row.querySelector('.dshwv-meter-fill').style.width + ':' + (row.querySelector('.dshwv-meter-value')?.textContent || ''))";
@@ -616,6 +621,29 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await capture('reminder-sound-settings');
     assert.equal(await js(`(() => { const row = (${timerRow}); const label = row.querySelector('span').getBoundingClientRect(); const check = row.querySelector('input').getBoundingClientRect(); return label.right <= check.left && row.scrollWidth <= row.clientWidth; })()`), true, 'Pomodoro sound row overlaps or overflows');
     await js("document.querySelector('.dshwv-menu-btn').click()");
+    // Last, as the restart phase finds the pet where this leaves it: dragged past the top of the
+    // screen, the pet's picture stops at the top and its bubble sits beside its head. The pet's
+    // own pointer handlers drag it, as a mouse held on its picture does.
+    await js(`(() => { const pet = document.querySelector('.dshwv-img'), r = pet.getBoundingClientRect(), x = r.x + r.width / 2;
+      const at = (type, y) => new PointerEvent(type, { bubbles: true, cancelable: true, composed: true, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y });
+      pet.dispatchEvent(at('pointerdown', r.y + r.height / 2));
+      for (const y of [r.y, r.y - 150, 0]) document.dispatchEvent(at('pointermove', y));
+      document.dispatchEvent(at('pointerup', 0)); })()`);
+    await until("Math.abs(document.querySelector('.dshwv-img').getBoundingClientRect().top) < 1 && document.querySelector('.dshwv-root').classList.contains('dshwv-beside')", 'the pet did not reach the top of the screen');
+    assert.equal(JSON.parse(await js("localStorage.getItem('dshw-pos')")).vAnchor, 'top', 'the place at the top is kept');
+    await click('.dshwv-img');
+    await until("!!document.querySelector('.dshwv-pop-open')", 'clicking the pet at the top did not open its bubble');
+    await delay(700);
+    const beside = await js(`(() => { const box = selector => document.querySelector(selector).getBoundingClientRect();
+      const pet = box('.dshwv-img'), cloud = box('.dshwv-pop .dshwv-bshape'), dot = box('.dshwv-pop .dshwv-b2'), mid = r => r.left + r.width / 2;
+      return { cloudTop: cloud.top, overlap: cloud.left < pet.right && cloud.right > pet.left,
+        between: (mid(dot) - mid(cloud)) * (mid(pet) - mid(dot)) > 0, level: dot.top + dot.height / 2 > pet.top && dot.top + dot.height / 2 < pet.bottom }; })()`);
+    assert.deepEqual(beside, { cloudTop: beside.cloudTop, overlap: false, between: true, level: true }, 'the bubble sits beside the pet and its dots lead to it');
+    assert.ok(beside.cloudTop >= 0, 'the bubble stays on the screen');
+    await capture('pet-at-top');
+    await js('window.__whaleRenderTest.close()');
+    passed.push('dragged past the top, the pet stops with its picture at the top and its bubble beside its head');
   }
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(output, phase + '.json'), JSON.stringify({ version: '0.2.6', phase, passed, layouts, rendering: renderInfo(), rendererErrors: errors }, null, 2));
