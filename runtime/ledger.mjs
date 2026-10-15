@@ -103,15 +103,8 @@ export function usageDefaults() {
     approvalSound: { on: true, sel: 'preset:fx1:release' },
     pomodoroSound: { on: true, sel: 'preset:fx1:release' },
     outcomeNotice: { failed: true, cancelled: true },
-    alert: { on: true, below: 5, msg: '余额已低于 {currency}{below}', lines: [
-      { type: 'text', text: '老大～你的 API 余额', size: 5, bold: true },
-      { type: 'text', text: '已经不足 {currency}{below} 啦', size: 6, bold: true, rgb: 'rouge' },
-      { type: 'image', imgId: 'bimg_yue_money', size: 6, imgScale: 0.3 },
-      { type: 'link', text: '打开当前 API 账单', url: '/provider-dashboard', size: 2, color: '#ffffff', bgRgb: 'indigo' },
-    ], autoClose: false, ttlSec: 6 },
-    budget: { on: true, amount: 10, msg: '今日已观测用量达到 {currency}{amount}', lines: [
-      { type: 'text', text: '今天已观测用量超过', size: 6, bold: true },
-      { type: 'text', text: '{currency}{amount}', size: 7, bold: true, rgb: 'rouge' },
-    ], autoClose: false, ttlSec: 6 },
+    // The old balance warning and daily budget: only carried over into quotaAlerts.
+    alert: { on: true, below: 5 },
+    budget: { on: true, amount: 10 },
   };
 }

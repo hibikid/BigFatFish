@@ -24,7 +24,7 @@ async function run(phase) {
   let logs = '', timedOut = false;
   child.stdout.on('data', chunk => { logs += chunk; });
   child.stderr.on('data', chunk => { logs += chunk; });
-  const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, 90000);
+  const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, 120000);
   const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).finally(() => clearTimeout(timer));
   fs.writeFileSync(path.join(output, phase + '.log'), logs);
   if (timedOut || code !== 0 || !fs.existsSync(path.join(output, phase + '.json'))) {

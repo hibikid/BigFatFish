@@ -6,7 +6,7 @@ import { ROOT, DATA_HOME, VERSION, readJson, writeJson } from './paths.mjs';
 import { WhaleService } from './service.mjs';
 import { SessionMonitor } from './session-monitor.mjs';
 import { createWidgetHost } from '../lib/widget-host.mjs';
-import { migrateData, stripRetiredModules } from './migration.mjs';
+import { migrateData } from './migration.mjs';
 import { createFxService } from './fx.mjs';
 import { MEDIA_POLICY } from '../lib/media-validation.mjs';
 import { ChatService } from './chat/service.mjs';
@@ -142,7 +142,7 @@ export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(o
       }
       if (url.pathname === '/api/show' && method === 'POST') { onShow(); return jsonResult(200, { ok: true, desktop: 'shown' }); }
       if (url.pathname === '/api/stop' && method === 'POST') { setTimeout(onStop, 100); return jsonResult(200, { ok: true }); }
-      const uiFiles = { '/': 'widget.html', '/widget.html': 'widget.html', '/toast.js': 'toast.js', '/quota-manager.js': 'quota-manager.js', '/ui.css': 'ui.css', '/render.js': 'render.js', '/input.js': 'input.js', '/alpha-worker.js': 'alpha-worker.js', '/money.js': 'money.js', '/media-guard.js': 'media-guard.js', '/turn-notice.js': 'turn-notice.js', '/usage-client.js': 'usage-client.js', '/bubble-queue.js': 'bubble-queue.js', '/pet-geometry.js': 'pet-geometry.js', '/usage-presentation.js': 'usage-presentation.js', '/quota-presentation.js': 'quota-presentation.js', '/quota-view.js': 'quota-view.js', '/quota.js': 'quota.js', '/quota.css': 'quota.css', '/companion-display.js': 'companion-display.js', '/chat.js': 'chat.js', '/chat-client.js': 'chat-client.js', '/chat-billing.js': 'chat-billing.js', '/chat.css': 'chat.css' };
+      const uiFiles = { '/': 'widget.html', '/widget.html': 'widget.html', '/toast.js': 'toast.js', '/quota-manager.js': 'quota-manager.js', '/ui.css': 'ui.css', '/render.js': 'render.js', '/input.js': 'input.js', '/alpha-worker.js': 'alpha-worker.js', '/money.js': 'money.js', '/media-guard.js': 'media-guard.js', '/turn-notice.js': 'turn-notice.js', '/usage-client.js': 'usage-client.js', '/bubble-queue.js': 'bubble-queue.js', '/pet-geometry.js': 'pet-geometry.js', '/usage-presentation.js': 'usage-presentation.js', '/quota-presentation.js': 'quota-presentation.js', '/quota-view.js': 'quota-view.js', '/quota.js': 'quota.js', '/quota.css': 'quota.css', '/companion-display.js': 'companion-display.js', '/chat.js': 'chat.js', '/chat-client.js': 'chat-client.js', '/chat-billing.js': 'chat-billing.js', '/chat.css': 'chat.css', '/theme.css': 'theme.css', '/theme.js': 'theme.js', '/pet.css': 'pet.css' };
       let file;
       if (Object.hasOwn(uiFiles, url.pathname)) file = path.join(ROOT, 'desktop', 'ui', uiFiles[url.pathname]);
       else if (url.pathname === '/lib/event-stream.js' || /^\/vendor\/eventsource-parser\/dist\/(index|parse|errors|types|stream)\.js$/.test(url.pathname)) file = path.join(ROOT, url.pathname.slice(1));
@@ -154,8 +154,7 @@ export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(o
       if (file) return ['GET', 'HEAD'].includes(method) ? { status: 200, headers: { 'content-type': MIME[path.extname(file)] }, body: method === 'HEAD' ? Buffer.alloc(0) : fs.readFileSync(file) } : jsonResult(405, { ok: false });
       const handler = routes.get(url.pathname);
       if (!handler) return jsonResult(404, { ok: false, error: '未找到此功能' });
-      if (/(?:role-pin|role-delete|bubble-img-upload)\.json$/.test(url.pathname) && !['POST', 'PUT'].includes(method)) return jsonResult(405, { ok: false });
-      if (url.pathname === '/dsh-whale/bubble.json' && ['POST', 'PUT'].includes(method)) body = Buffer.from(JSON.stringify(stripRetiredModules(parsed())));
+      if (/(?:role-pin|role-delete)\.json$/.test(url.pathname) && !['POST', 'PUT'].includes(method)) return jsonResult(405, { ok: false });
       const requestBytes = Buffer.isBuffer(body) ? body : bytes;
       const req = Readable.from(requestBytes.length ? [requestBytes] : []);
       Object.assign(req, { url: route, method, headers: { 'content-type': 'application/json', ...headers } });

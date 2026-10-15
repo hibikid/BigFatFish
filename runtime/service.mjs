@@ -177,7 +177,6 @@ export class WhaleService {
   readUsageSettings() {
     const saved = readJson(this.usageSettingsFile, {});
     const defaults = usageDefaults();
-    defaults.alert.lines.find(line => line.type === 'link').url = this.config.resolve().dashboardUrl;
     for (const key of Object.keys(defaults)) defaults[key] = { ...defaults[key], ...saved[key] };
     // Quota reminders replaced the old balance warning and daily budget, which carry over.
     let currency = 'USD';

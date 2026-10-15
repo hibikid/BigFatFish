@@ -56,13 +56,23 @@ function resizeInput() {
   input.style.height = 'auto'; input.style.height = Math.min(120, Math.max(48, input.scrollHeight)) + 'px';
   controls(); display.layout();
 }
+// The history as bubbles: mine on the right, the pet's beside its picture.
 function renderHistory() {
-  const history = $('chat-history'); history.replaceChildren();
+  const history = $('chat-history'), pet = document.querySelector('.dshwv-img'); history.replaceChildren();
   for (const turn of turns) {
-    for (const [label, text] of [...(turn.user ? [['我', turn.user]] : []), [turn.source === 'pomodoro' ? '番茄钟' : '角色', turn.text || turn.error || '']]) {
+    const pomodoro = turn.source === 'pomodoro';
+    for (const [label, text, mine] of [...(turn.user ? [['我', turn.user, true]] : []), [pomodoro ? '番茄钟' : '角色', turn.text || turn.error || '', false]]) {
       const row = document.createElement('div'), heading = document.createElement('strong'), body = document.createElement('div');
-      row.className = 'chat-message'; heading.textContent = label; body.textContent = text;
-      row.append(heading, body); history.append(row);
+      row.className = 'chat-message ' + (mine ? 'chat-message-me' : 'chat-message-pet' + (pomodoro ? ' chat-message-notice' : ''));
+      heading.className = 'chat-message-who'; heading.textContent = label;
+      body.className = 'chat-message-text'; body.textContent = text;
+      row.append(heading);
+      if (!mine) {
+        const avatar = document.createElement('span'), face = document.createElement('img');
+        avatar.className = 'chat-avatar'; face.alt = ''; face.src = pet?.currentSrc || pet?.src || '';
+        avatar.append(face); row.append(avatar);
+      }
+      row.append(body); history.append(row);
     }
   }
   history.scrollTop = history.scrollHeight;

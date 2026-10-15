@@ -98,7 +98,7 @@
   }
 
   class BubbleRenderer {
-    constructor(container, gifUrl) {
+    constructor(container) {
       this.container = container;
       this.epoch = 0;
       this.switching = false;
@@ -117,10 +117,6 @@
           el.className = 'dshwv-' + kind;
           parts[kind] = el; root.appendChild(el);
         }
-        parts.gif = document.createElement('img');
-        parts.gif.className = 'dshwv-gif'; parts.gif.alt = '';
-        parts.gif.draggable = false; parts.gif.src = gifUrl;
-        parts.gif.style.display = 'none'; root.appendChild(parts.gif);
         container.appendChild(root);
         return parts;
       });
@@ -139,17 +135,16 @@
       this.back.root.setAttribute('aria-hidden', 'true');
     }
     reset(parts) {
-      // Only the hidden buffer is edited. The four legacy nodes are reused.
+      // Only the hidden buffer is edited. The three text nodes are reused.
       window.WhaleMoney?.clearBindings(parts.root);
       for (const child of [...parts.root.children]) {
-        if (![parts.label, parts.amount, parts.hint, parts.gif].includes(child)) child.remove();
+        if (![parts.label, parts.amount, parts.hint].includes(child)) child.remove();
       }
       for (const kind of ['label', 'amount', 'hint']) {
         const el = parts[kind];
         el.className = 'dshwv-' + kind; el.removeAttribute('style');
         el.textContent = ''; el.removeAttribute('title');
       }
-      parts.gif.style.display = 'none';
     }
     async ready(parts) {
       const images = [...parts.root.querySelectorAll('img')].filter(img => img.style.display !== 'none');

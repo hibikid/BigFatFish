@@ -8,7 +8,7 @@
   // First-file checks do not wait for a network request. The local policy
   // endpoint replaces these defaults; tests keep them equal to MEDIA_POLICY.
   const DEFAULT_POLICY = Object.freeze({
-    roleBytes: 20 * 1024 * 1024, bubbleBytes: 8 * 1024 * 1024,
+    roleBytes: 20 * 1024 * 1024,
     audioBytes: 8 * 1024 * 1024, audioSourceBytes: 20 * 1024 * 1024,
     maxImageDimension: 4096, maxImagePixels: 16777216,
     maxFrames: 600, maxAnimationPixels: 128000000,
@@ -45,7 +45,6 @@
     }
     function byteLimit(kind) {
       if (kind === 'role') return policy.roleBytes;
-      if (kind === 'bubble') return policy.bubbleBytes;
       if (kind === 'audio') return policy.audioSourceBytes;
       if (kind === 'wav') return policy.audioBytes;
       return error('未知素材类型');
@@ -176,7 +175,7 @@
       return { format: 'webp', mime: 'image/webp', width, height, frames: 1, animated: false };
     }
     function inspectImage(input, kind = 'role') {
-      if (kind !== 'role' && kind !== 'bubble') error('未知图片类型');
+      if (kind !== 'role') error('未知图片类型');
       const bytes = bytesOf(input); checkFile({ size: bytes.byteLength }, kind);
       let result;
       if (isPng(bytes)) result = png(bytes);
@@ -184,7 +183,6 @@
       else if (bytes[0] === 255 && bytes[1] === 216) result = jpeg(bytes);
       else if (bytes.length >= 12 && reader(bytes).ascii(0, 4) === 'RIFF' && reader(bytes).ascii(8, 4) === 'WEBP') result = webp(bytes);
       else error('只接受有效的 PNG、JPEG、WebP 或 GIF 图片');
-      if (kind === 'bubble' && !['png', 'apng', 'gif'].includes(result.format)) error('泡泡图片只支持 PNG 或 GIF');
       return Object.freeze(result);
     }
     function isAnimatedPng(input) {

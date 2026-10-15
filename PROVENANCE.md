@@ -16,7 +16,7 @@
 
 ## 二、保留自上游的部分
 
-- 角色与素材：`assets/DSniang1.png`、`assets/DSniang02.png`、`assets/DSH2.png`、`assets/*.gif`、`assets/*.mp3`（按上游 `PROVENANCE` 说明，这些美术素材由维护者提供，随插件 as-is 分发）。
+- 角色与素材：`assets/DSniang1.png`、`assets/DSniang02.png`、`assets/DSH2.png`、`assets/*.mp3`（按上游 `PROVENANCE` 说明，这些美术素材由维护者提供，随插件 as-is 分发）。
 - 挂件前端的大部分交互与视觉实现：`assets/whale-widget.js` 中的气泡渲染、菜单、角色/音效/素材管理、拖动吸附与翻转等。
 
 ## 三、本分支的改造（0.2.4）
@@ -34,7 +34,7 @@
 | 范围 | 许可 |
 |---|---|
 | 代码（`desktop/`、`runtime/`、`lib/`、`scripts/`、`.codex-plugin/`、`skills/`、文档） | **MIT**（见 [`LICENSE`](LICENSE)，沿用上游署名） |
-| `assets/**`（图片 / 动图 / 音效） | **不在 MIT 覆盖范围**：随插件 as-is 分发，仅用于运行本挂件；不授予再许可，也不声明为原创作品 |
+| `assets/**`（图片 / 音效） | **不在 MIT 覆盖范围**：随插件 as-is 分发，仅用于运行本挂件；不授予再许可，也不声明为原创作品 |
 | `vendor/smol-toml/**` | **BSD-3-Clause**，Cynthia Rey 及贡献者，见 `vendor/smol-toml/LICENSE` |
 | Electron | **MIT**（含 Chromium 与第三方声明），由可选安装脚本单独下载，不随本仓库分发 |
 

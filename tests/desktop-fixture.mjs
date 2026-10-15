@@ -96,8 +96,10 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await until(`(WhaleMoney.state().displayCurrency || '') === ${JSON.stringify(currency)} && !document.querySelector('[data-quota-currency]').disabled`, 'the display currency did not change to ' + (currency || '原币种'));
   }
   const saved = () => dispatcher.whale.readUsageSettings().approvalSound;
-  const row = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('审批提醒音效'))";
-  const timerRow = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('番茄钟提醒音效'))";
+  const row = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('审批提醒'))";
+  const timerRow = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('番茄钟'))";
+  // Bubble text without its line breaks: a subscription's windows sit side by side.
+  const flat = source => `(${source}).replace(/\\s+/g, '')`;
   async function approval() {
     await delay(800);
     const result = await bridgeRequest('/internal/approval-request', { method: 'POST', body: { event: 'PermissionRequest' }, dataDir });
@@ -128,7 +130,7 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
       const frame = document.querySelector('.dshwv-frame[data-buffer="' + state.front + '"]');
       const box = frame.closest('.dshwv-text').getBoundingClientRect();
       const bounds = rect => ({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
-      const rows = [...frame.querySelectorAll('.dshwv-trow, .dshwv-label, .dshwv-amount, .dshwv-hint')]
+      const rows = [...frame.querySelectorAll('.dshwv-trow, .dshwv-label, .dshwv-amount, .dshwv-hint, .dshwv-quota-head, .dshwv-quota-stat, .dshwv-quota-hint')]
         .filter(el => el.checkVisibility({ visibilityProperty: true }))
         .map(el => ({ text: el.innerText, bounds: bounds(el.getBoundingClientRect()) }));
       return { scene: state.scene, text: frame.innerText, bounds: bounds(box), rows,
@@ -147,6 +149,8 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     // The first run ends with the pet dragged to the top of the screen.
     await until("Math.abs(document.querySelector('.dshwv-img').getBoundingClientRect().top) < 1 && document.querySelector('.dshwv-root').classList.contains('dshwv-beside')", 'the pet left at the top did not come back there');
     passed.push('a pet left at the top of the screen comes back there after a restart');
+    assert.equal(await js('document.documentElement.dataset.theme'), 'lace', 'the first run ends on 女仆墨蓝, which a restart keeps');
+    passed.push('the chosen theme survives a full process restart');
   }
   await js('window.__whaleRenderTest.place(300, 300, false)');
   // Each bar as label:fill:value — a subscription shows the share left, an API account the money left.
@@ -465,13 +469,13 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     saveClaudeTurn(dataDir, { hook_event_name: 'Stop', session_id: 'fixture' }, now + 1000);
     await js('window.__whaleRenderTest.poll()');
     await until("document.querySelector('.dshwv-root').title.includes('Claude 订阅') && window.__whaleRenderTest.status().account === 'claude'", 'a Claude reply did not make Claude the account in use');
-    await until("window.__whaleRenderTest.status().scene === 'cost' && !window.__whaleRenderTest.status().switching && Number(getComputedStyle(document.querySelector('.dshwv-pop-open .dshwv-bshape')).opacity) > 0.99 && Number(getComputedStyle(document.querySelector('.dshwv-pop-open .dshwv-text')).opacity) > 0.99 && [...document.querySelectorAll('.dshwv-pop-open .dshwv-frame')].some(el => el.innerText.includes('Claude 回复完成') && el.innerText.includes('5小时剩余80%') && Number(getComputedStyle(el).opacity) > 0.99)", 'Claude reply did not open a visible completion bubble');
+    await until("window.__whaleRenderTest.status().scene === 'cost' && !window.__whaleRenderTest.status().switching && Number(getComputedStyle(document.querySelector('.dshwv-pop-open .dshwv-bshape')).opacity) > 0.99 && Number(getComputedStyle(document.querySelector('.dshwv-pop-open .dshwv-text')).opacity) > 0.99 && [...document.querySelectorAll('.dshwv-pop-open .dshwv-frame')].some(el => " + flat('el.innerText') + ".includes('Claude回复完成5小时剩余80%') && Number(getComputedStyle(el).opacity) > 0.99)", 'Claude reply did not open a visible completion bubble');
     assert.equal((await measureLayout('claude-completion')).fits, true, 'Claude completion must fit the visible bubble');
     assert.equal(await js("window.__whaleRenderTest.status().scene === 'cost' && document.querySelector('.dshwv-pop').classList.contains('dshwv-pop-open')"), true,
       'Claude completion closed before its screenshot finished');
     await js('window.__whaleRenderTest.close()');
     await click('.dshwv-img');
-    await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('Claude 订阅额度') && el.innerText.includes('5小时剩余80%') && el.innerText.includes('7天剩余35%'))", 'click after Claude reply did not show Claude quota');
+    await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => " + flat('el.innerText') + ".includes('Claude订阅额度5小时剩余80%7天剩余35%'))", 'click after Claude reply did not show Claude quota side by side');
     assert.equal((await measureLayout('claude-quota')).fits, true, 'Claude quota rows must fit the visible bubble');
     await js('window.__whaleRenderTest.close()');
     fs.rmSync(path.join(dataDir, 'claude-subscription.json'));
@@ -510,46 +514,32 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     dispatcher.whale.writeUsageSettings({ quotaAlerts: { windowPercent: 20 } });
     passed.push('额度管理 shows records with a seven-day chart and saves reminders, and the pet shows a quota reminder once');
     await click('.dshwv-img');
-    await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('5小时剩余75%') && Number(getComputedStyle(el).opacity) > 0.99)", 'native subscription click did not become visible');
-    await measureLayout('subscription-native-click');
-    await js('window.__whaleRenderTest.close()');
-    const profile = await dispatcher.dispatch('/dsh-whale/bubble.json', { method: 'POST', body: { v: 1, lib: [], items: [{ kind: 'custom', modules: [
-      { type: 'text', text: '当前 API 余额', size: 4 }, { type: 'balance', size: 8 }, { type: 'today', size: 4 }
-    ] }] } });
-    assert.equal(profile.status, 200);
-    window.webContents.reload();
-    await until("!!window.__whaleRenderTest && document.querySelector('.dshwv-root').title.includes('Codex 订阅')", 'subscription profile did not load after reload');
-    await js('window.__playedAudio = []; HTMLMediaElement.prototype.play = function () { window.__playedAudio.push(this.src); return Promise.resolve(); }; undefined;');
-    await click('.dshwv-img');
-    await until("!window.__whaleRenderTest.status().switching && window.__whaleRenderTest.status().randomPicks.includes('7天剩余40%') && [...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => Number(getComputedStyle(el).opacity) > 0.99)", 'size-8 subscription click did not become visible');
-    const profileLayout = await measureLayout('subscription-size-8-click');
-    assert.ok(profileLayout.fits, 'size-8 subscription text overflowed its content area');
-    await js('window.__whaleRenderTest.close()');
+    await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => " + flat('el.innerText') + ".includes('Codex订阅额度5小时剩余75%7天剩余40%') && Number(getComputedStyle(el).opacity) > 0.99)", 'native subscription click did not become visible');
+    const clickLayout = await measureLayout('subscription-native-click');
+    assert.ok(clickLayout.fits, 'the subscription click text overflowed its content area');
+    assert.equal(await js("document.querySelectorAll('.dshwv-pop-open .dshwv-frame[aria-hidden=false] .dshwv-quota-stat').length"), 2, 'the two windows sit side by side');
+    await click('.dshwv-pop-open .dshwv-bshape');
+    await until('!window.__whaleRenderTest.status().shown', 'a click on the bubble did not close it');
+    passed.push('a click on the pet shows the quota in use, the windows side by side, and a click on the bubble closes it');
     const quotaTurn = { id: 'fixture:subscription', sessionId: 'fixture', turnId: 'subscription', ts: Date.now(),
       subscriptionRateLimits: rateLimits,
       byModel: { 'test-model': { input_tokens: 100, cached_input_tokens: 0, output_tokens: 20 } } };
     dispatcher.whale.beginTurn(quotaTurn);
     await dispatcher.whale.finishTurn(quotaTurn);
     await js('window.__whaleRenderTest.poll()');
-    await until("window.__whaleRenderTest.status().scene === 'cost' && !window.__whaleRenderTest.status().switching && window.__whaleRenderTest.status().randomPicks.includes('5小时剩余75%') && [...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => Number(getComputedStyle(el).opacity) > 0.99)", 'subscription completion did not become visible');
+    await until("window.__whaleRenderTest.status().scene === 'cost' && !window.__whaleRenderTest.status().switching && " + flat('window.__whaleRenderTest.status().text') + ".includes('Codex任务完成5小时剩余75%') && [...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => Number(getComputedStyle(el).opacity) > 0.99)", 'subscription completion did not become visible');
     const completionLayout = await measureLayout('subscription-completion');
-    assert.equal(completionLayout.rows.length, 3);
-    assert.ok(completionLayout.text.includes('7天剩余40%'));
+    assert.deepEqual(completionLayout.rows.map(row => row.text.replace(/\s+/g, '')).slice(0, 3), ['Codex任务完成', '5小时剩余75%', '7天剩余40%']);
     assert.ok(!completionLayout.text.includes('待记账'));
     assert.ok(completionLayout.fits, 'subscription completion text overflowed its content area');
-    passed.push('size-8 native click and subscription completion text fit their content area; default and legacy layouts are measured separately');
-    await js('window.__whaleRenderTest.close()');
-    await js('window.__whaleRenderTest.queue([{ kind: "normal" }]); window.__whaleRenderTest.open();');
-    await until("window.__whaleRenderTest.status().randomPicks.includes('5小时剩余75%') && window.__whaleRenderTest.status().randomPicks.includes('7天剩余40%')", 'subscription bubble did not use quota text');
-    await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('5小时剩余75%') && Number(getComputedStyle(el).opacity) > 0.99)", 'subscription text did not become visible');
-    await measureLayout('subscription-forced-normal');
+    passed.push('the subscription click and completion fit their content area');
     await js('window.__whaleRenderTest.close()');
     const completed = { id: 'fixture:completed', sessionId: 'fixture', turnId: 'completed', ts: Date.now(),
       byModel: { 'test-model': { input_tokens: 100, cached_input_tokens: 0, output_tokens: 20 } } };
     dispatcher.whale.beginTurn(completed);
     await dispatcher.whale.finishTurn(completed);
     await js('window.__whaleRenderTest.poll()');
-    await until("window.__whaleRenderTest.status().scene === 'cost' && window.__whaleRenderTest.status().randomPicks.includes('待记账') && window.__whaleRenderTest.status().randomPicks.includes('120 tokens')", 'task result did not become a cost bubble');
+    await until("window.__whaleRenderTest.status().scene === 'cost' && window.__whaleRenderTest.status().text.includes('待记账') && window.__whaleRenderTest.status().text.includes('120 tokens')", 'task result did not become a cost bubble');
     await until("[...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => el.innerText.includes('待记账') && Number(getComputedStyle(el).opacity) > 0.99)", 'task cost text did not become visible');
     await capture('task-cost-display');
     await js('window.__whaleRenderTest.close()');
@@ -620,7 +610,40 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await until("(() => { const badge = document.getElementById('chat-timer').getBoundingClientRect(); const menu = document.querySelector('.dshwv-menu-open')?.getBoundingClientRect(); return menu && (badge.right <= menu.left || badge.left >= menu.right || badge.bottom <= menu.top || badge.top >= menu.bottom); })()", 'timer badge covered the sound settings menu');
     await capture('reminder-sound-settings');
     assert.equal(await js(`(() => { const row = (${timerRow}); const label = row.querySelector('span').getBoundingClientRect(); const check = row.querySelector('input').getBoundingClientRect(); return label.right <= check.left && row.scrollWidth <= row.clientWidth; })()`), true, 'Pomodoro sound row overlaps or overflows');
+    assert.equal(await js("[...document.querySelectorAll('.dshwv-menu button')].some(button => button.textContent.includes('自定义泡泡'))"), false, 'the custom bubble editor is gone');
     await js("document.querySelector('.dshwv-menu-btn').click()");
+    // Three themes, chosen in the menu and kept: each surface takes its colors.
+    // The default theme needs no saved choice; another one is kept as dshw-theme.
+    const theme = name => `document.documentElement.dataset.theme === ${JSON.stringify(name)} && (localStorage.getItem('dshw-theme') || 'soda') === ${JSON.stringify(name)}`;
+    assert.equal(await js("document.documentElement.dataset.theme"), 'soda', 'the first theme is the default');
+    for (const name of ['soda', 'abyss', 'lace']) {
+      await js('window.__whaleRenderTest.close(); window.__whaleRenderTest.place(600, 300, false)');
+      await click('.dshwv-menu-btn');
+      await until("document.querySelector('.dshwv-menu').classList.contains('dshwv-menu-open')", 'the menu did not open for the theme ' + name);
+      await click(`.dshwv-theme-pick[data-theme-id=${name}]`);
+      await until(theme(name) + ` && document.querySelector('.dshwv-theme-pick[data-theme-id=${name}]').getAttribute('aria-pressed') === 'true'`, 'choosing the theme ' + name + ' did not apply it');
+      assert.notEqual(await js("getComputedStyle(document.querySelector('.dshwv-menu')).backgroundColor"), 'rgba(0, 0, 0, 0)', 'the menu has a surface in ' + name);
+      await capture('theme-' + name + '-menu');
+      await js("document.querySelector('.dshwv-menu-btn').click()");
+      await click('.dshwv-img');
+      await until("!window.__whaleRenderTest.status().switching && [...document.querySelectorAll('.dshwv-pop-open .dshwv-text')].some(el => Number(getComputedStyle(el).opacity) > 0.99)", 'the quota bubble did not show in ' + name);
+      await capture('theme-' + name + '-bubble');
+      await js('window.__whaleRenderTest.close(); window.__whaleQuotaTest.open()');
+      await until("!document.querySelector('.quota-overview').hidden", 'the overview did not open in ' + name);
+      await capture('theme-' + name + '-overview');
+      await js('window.__whaleQuotaTest.close()');
+      await js("window.dispatchEvent(new Event('whale-chat-open'))");
+      await until("!document.getElementById('chat-composer').hidden && !document.getElementById('chat-new').disabled", 'chat did not open in ' + name);
+      await js("if (document.getElementById('chat-history').hidden) document.getElementById('chat-show-history').click()");
+      await until("!document.getElementById('chat-history').hidden && !!document.querySelector('.chat-message-pet .chat-avatar img')", 'chat history did not show bubbles in ' + name);
+      await capture('theme-' + name + '-chat');
+      await js("document.getElementById('chat-close').click()");
+      await js("window.dispatchEvent(new CustomEvent('whale-open-settings', { detail: { tab: 'records' } }))");
+      await until("document.getElementById('quota-manager').open && !!document.querySelector('.quota-chart')", 'the records did not open in ' + name);
+      await capture('theme-' + name + '-records');
+      await js("document.querySelector('[data-quota-close]').click()");
+    }
+    passed.push('the menu switches between the three themes and every surface takes the chosen colors');
     // Last, as the restart phase finds the pet where this leaves it: dragged past the top of the
     // screen, the pet's picture stops at the top and its bubble sits beside its head. The pet's
     // own pointer handlers drag it, as a mouse held on its picture does.
