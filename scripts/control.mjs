@@ -9,8 +9,9 @@ try {
   else if (command === 'balance') result = await serviceRequest('/dsh-whale/balance.json' + (process.argv.includes('--refresh') ? '?refresh=1' : ''));
   else if (command === 'usage') result = await serviceRequest('/api/quota-records');
   else if (command === 'status') result = await serviceRequest('/api/status');
+  else if (command === 'agents') result = await serviceRequest('/api/agents');
   else if (command === 'stop') { const running = await runningService(DATA_HOME); result = running ? await serviceRequest('/api/stop', { method: 'POST', body: {} }) : { ok: true, stopped: true }; }
-  else throw new Error('支持 open、desktop、balance、usage、status、stop');
+  else throw new Error('支持 open、desktop、balance、usage、status、agents、stop');
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
   if (result.ok === false) process.exitCode = 1;
 } catch (error) { process.stderr.write(error.message + '\n'); process.exitCode = 1; }

@@ -47,6 +47,20 @@ try {
   await runHook({ hook_event_name: 'PostToolUse' });
   assert.equal(notices, 1);
 
+  // On Windows Codex runs the hook with cmd.exe /C, where only double quotes group words.
+  const windowsHome = path.join(root, '.codex-windows');
+  fs.mkdirSync(windowsHome);
+  const windows = { codexHome: windowsHome, platform: 'win32', nodePath: 'C:\\Program Files\\nodejs\\node.exe',
+    root: 'C:\\Users\\me\\plugins\\api-balance-whale', dataDir: 'C:\\Users\\me\\.codex\\whale-widget' };
+  assert.equal(installApprovalHook(windows), true);
+  const windowsCommand = JSON.parse(fs.readFileSync(path.join(windowsHome, 'hooks.json'), 'utf8')).hooks.PermissionRequest[0].hooks[0].command;
+  assert.ok(windowsCommand.startsWith('"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\plugins\\api-balance-whale'), windowsCommand);
+  assert.ok(windowsCommand.endsWith('approval-request-hook.mjs" "--whale-approval-hook" "--data-dir" "C:\\Users\\me\\.codex\\whale-widget"'), windowsCommand);
+  assert.equal(windowsCommand.includes("'"), false);
+  assert.equal(installApprovalHook(windows), false, 'a backslashed path is still recognized as the pet\'s hook');
+  assert.equal(uninstallApprovalHook({ codexHome: windowsHome }), true);
+  assert.equal(fs.existsSync(path.join(windowsHome, 'hooks.json')), false);
+
   assert.equal(uninstallApprovalHook({ codexHome }), true);
   const restored = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.equal(restored.hooks.Stop.length, 1);

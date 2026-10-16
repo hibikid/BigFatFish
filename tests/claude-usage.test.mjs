@@ -8,7 +8,7 @@ import { captureClaudeUsage, claudeSubscription, saveClaudeUsage } from '../runt
 import { configureClaudeStatusline } from '../scripts/configure-claude-statusline.mjs';
 import { createDispatcher } from '../runtime/dispatcher.mjs';
 import { bridgeRequest, startBridge } from '../runtime/bridge.mjs';
-import { claudeIntegrationStatus } from '../runtime/claude-integration.mjs';
+import { claudeIntegrationStatus, findNode } from '../runtime/claude-integration.mjs';
 import { CLAUDE_TRACKED_EVENTS } from '../runtime/agents/claude-hooks.mjs';
 
 const sample = now => ({ session_id: 'private-session', transcript_path: '/private/chat.jsonl',
@@ -125,6 +125,30 @@ test('installer preserves unrelated settings, rejects another status line and re
   assert.equal(configureClaudeStatusline('install', { claudeHome, dataDir: '/tmp/whale data' }), 'already-installed');
   assert.equal(configureClaudeStatusline('uninstall', { claudeHome }), 'uninstalled');
   assert.deepEqual(JSON.parse(fs.readFileSync(file)), original);
+});
+
+test('on Windows the commands run in Git Bash: real Node, forward slashes, still recognized as the pet\'s', t => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-claude-windows-'));
+  t.after(() => fs.rmSync(claudeHome, { recursive: true, force: true }));
+  const file = path.join(claudeHome, 'settings.json');
+  fs.writeFileSync(file, JSON.stringify({ theme: 'dark' }));
+  const nodePath = 'C:\\Program Files\\nodejs\\node.exe';
+  assert.equal(configureClaudeStatusline('install', { claudeHome, platform: 'win32', nodePath, dataDir: 'C:\\Users\\me\\.codex\\whale-widget' }), 'installed');
+  const installed = JSON.parse(fs.readFileSync(file));
+  for (const command of [installed.statusLine.command, installed.hooks.Stop[0].hooks[0].command]) {
+    assert.ok(command.startsWith("'C:/Program Files/nodejs/node.exe' "), command);
+    assert.ok(command.endsWith(" '--data-dir' 'C:/Users/me/.codex/whale-widget'"), command);
+    assert.equal(command.includes('\\'), false, 'Git Bash would eat a backslash');
+  }
+  assert.equal(claudeIntegrationStatus({ claudeHome }).tracking, true);
+  assert.equal(configureClaudeStatusline('install', { claudeHome, platform: 'win32', nodePath, dataDir: 'C:\\Users\\me\\.codex\\whale-widget' }), 'already-installed');
+  assert.equal(configureClaudeStatusline('uninstall', { claudeHome }), 'uninstalled');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { theme: 'dark' });
+
+  const files = new Set(['C:\\tools\\node\\node.exe', 'C:\\Program Files\\nodejs\\node.exe']);
+  assert.equal(findNode({ platform: 'win32', env: { Path: 'C:\\Windows;C:\\tools\\node' }, isFile: file => files.has(file) }), 'C:\\tools\\node\\node.exe');
+  assert.equal(findNode({ platform: 'win32', env: { PATH: 'C:\\Windows', ProgramFiles: 'C:\\Program Files' }, isFile: file => files.has(file) }), 'C:\\Program Files\\nodejs\\node.exe');
+  assert.equal(findNode({ platform: 'win32', env: {}, isFile: () => false }), process.execPath);
 });
 
 test('an install from before the task window is reported as outdated and updated in place', t => {

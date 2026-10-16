@@ -4,7 +4,7 @@
 
 ## 安装与使用
 
-在额度管理的“账户”页点“接入 Claude Code”，或在 macOS 已安装 Claude Code 的机器上执行 `node scripts/configure-claude-statusline.mjs install`。两者都解析并原子更新 `~/.claude/settings.json`，保留其他字段和已有 hooks；若已有非大肥鱼的 `statusLine` 命令，则拒绝覆盖。“移除接入”或 `node scripts/configure-claude-statusline.mjs uninstall` 只移除大肥鱼自己的状态栏和 hooks。早先只装了 `Stop` hook 的接入会显示“更新接入”，更新时旧的 `claude-stop.mjs` 换成 `claude-hook.mjs`。机器上没有独立的 Node 时，命令改用桌面应用自带的运行时。
+在额度管理的“账户”页点“接入 Claude Code”，或在 macOS 已安装 Claude Code 的机器上执行 `node scripts/configure-claude-statusline.mjs install`。两者都解析并原子更新 `~/.claude/settings.json`，保留其他字段和已有 hooks；若已有非大肥鱼的 `statusLine` 命令，则拒绝覆盖。“移除接入”或 `node scripts/configure-claude-statusline.mjs uninstall` 只移除大肥鱼自己的状态栏和 hooks。早先只装了 `Stop` hook 的接入会显示“更新接入”，更新时旧的 `claude-stop.mjs` 换成 `claude-hook.mjs`。机器上没有独立的 Node 时，命令改用桌面应用自带的运行时。Windows 上 Claude Code 通过 Git Bash 执行这些命令，大肥鱼写入的路径用正斜杠，并优先使用 PATH 或 Program Files 里的 `node.exe`。
 
 Claude 收到回复并刷新状态栏时，会把 JSON 送给 `scripts/claude-statusline.mjs`。该脚本写入挂件数据目录中的 `claude-subscription.json`，并在 Claude 终端状态栏显示简短剩余额度。主会话回复完成后，`scripts/claude-hook.mjs`（早先的接入是 `scripts/claude-stop.mjs`）写入 `claude-last-turn.json`；挂件弹出“Claude 回复完成”及额度，并使用现有任务结束音效设置。Claude 的回复完成算作 Claude 订阅的活动，挂件因此切到 Claude 的额度；规则见 [当前额度](QUOTA.md#当前额度)。挂件只重读本地快照，不向 Claude 发起新的请求。配置生效前已完成的回复不会补发提示。
 

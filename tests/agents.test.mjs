@@ -7,8 +7,9 @@ import test from 'node:test';
 import { SessionParser } from '../runtime/session-monitor.mjs';
 import { AgentBoard } from '../runtime/agents/board.mjs';
 import { claudeFiles, readClaudeSessions, recordClaudeHook, recordClaudeStatus } from '../runtime/agents/claude-hooks.mjs';
-import { jumpPlan, jumpTo } from '../runtime/agents/jump.mjs';
+import { WINDOWS_SCRIPT, jumpPlan, jumpTo } from '../runtime/agents/jump.mjs';
 import { createDispatcher } from '../runtime/dispatcher.mjs';
+import { bridgeRequest, startBridge } from '../runtime/bridge.mjs';
 
 const MINUTE = 60000;
 const tempDir = t => {
@@ -175,7 +176,7 @@ test('the board orders rows by urgency and marks stuck, waiting, finished, idle 
 });
 
 test('a jump goes to the Ghostty tab in the folder, or the thread in the Codex app', async () => {
-  assert.equal(jumpPlan({ tool: 'claude', cwd: '/work/whale' }, 'win32'), null);
+  assert.equal(jumpPlan({ tool: 'claude', cwd: '/work/whale' }, 'linux'), null);
   const app = jumpPlan({ id: 'codex:thread one', tool: 'codex', app: true, cwd: '/work' }, 'darwin');
   assert.deepEqual(app.args, ['codex://threads/thread%20one']);
   const tab = jumpPlan({ id: 'claude:x', tool: 'claude', cwd: '/work/whale' }, 'darwin');
@@ -193,7 +194,26 @@ test('a jump goes to the Ghostty tab in the folder, or the thread in the Codex a
   const noLink = async (command, args) => { fallback.push(args[0]); if (args[0] !== '-b') throw new Error('no handler'); return ''; };
   assert.deepEqual(await jumpTo({ id: 'codex:t', tool: 'codex', app: true }, { platform: 'darwin', run: noLink }), { ok: true, target: 'codex-app' });
   assert.deepEqual(fallback, ['codex://threads/t', '-b']);
-  assert.match((await jumpTo({ tool: 'claude', cwd: '/w' }, { platform: 'linux' })).error, /macOS/);
+  assert.match((await jumpTo({ tool: 'claude', cwd: '/w' }, { platform: 'linux' })).error, /macOS 和 Windows/);
+});
+
+test('on Windows a jump goes to the terminal tab titled for the session, or the thread in the Codex app', async () => {
+  const app = jumpPlan({ id: 'codex:thread-1', tool: 'codex', app: true, cwd: 'C:\\work' }, 'win32');
+  assert.deepEqual([app.command, ...app.args], ['rundll32.exe', 'url.dll,FileProtocolHandler', 'codex://threads/thread-1']);
+  const tab = jumpPlan({ id: 'claude:x', tool: 'claude', name: "bob's-notes", cwd: 'C:\\work\\bob\'s-notes' }, 'win32');
+  assert.equal(tab.command, 'powershell.exe');
+  assert.deepEqual(tab.args.slice(0, -1), ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand']);
+  const script = Buffer.from(tab.args.at(-1), 'base64').toString('utf16le');
+  assert.ok(script.startsWith("$name = 'bob''s-notes'\n$hints = @('Claude', '✳')\n"), 'the project and the title words go in as PowerShell literals');
+  assert.ok(script.endsWith(WINDOWS_SCRIPT));
+  assert.equal(WINDOWS_SCRIPT.includes('${'), false, 'the script is not a JavaScript template');
+  const answer = output => async () => output;
+  assert.deepEqual(await jumpTo({ tool: 'codex', name: 'api' }, { platform: 'win32', run: answer('tab\r\n') }), { ok: true, target: 'tab' });
+  assert.equal((await jumpTo({ tool: 'codex', name: 'api' }, { platform: 'win32', run: answer('app') })).message, '没找到这个会话的标签，已切到终端');
+  assert.equal((await jumpTo({ tool: 'codex', name: 'api' }, { platform: 'win32', run: answer('none') })).error, '没有找到打开的终端窗口');
+  const broken = async () => { throw new Error('powershell failed'); };
+  assert.equal((await jumpTo({ tool: 'codex', name: 'api' }, { platform: 'win32', run: broken })).error, '没能切到终端');
+  assert.equal((await jumpTo({ id: 'codex:t', tool: 'codex', app: true }, { platform: 'win32', run: broken })).error, '没能打开 Codex 应用');
 });
 
 test('the local routes list, jump to and hide rows', async t => {
@@ -221,4 +241,9 @@ test('the local routes list, jump to and hide rows', async t => {
   assert.deepEqual((await call('/api/agents')).rows.map(row => row.id), ['codex:codex-one', 'claude:claude-two']);
   assert.equal((await call('/api/agents/jump', { id: 'claude:gone' })).status, 404);
   assert.equal((await dispatcher.dispatch('/agents.js')).status, 200);
+  // `node scripts/control.mjs agents` reads the list over the local pipe; jumping stays in the page.
+  const bridge = await startBridge(dispatcher, { dataDir });
+  t.after(() => bridge.close());
+  assert.deepEqual((await bridgeRequest('/api/agents', { dataDir })).rows.map(row => row.id), ['codex:codex-one', 'claude:claude-two']);
+  assert.equal((await bridgeRequest('/api/agents/jump', { method: 'POST', body: { id: 'codex:codex-one' }, dataDir })).ok, false);
 });

@@ -6,8 +6,10 @@ import { CODEX_HOME, DATA_HOME, ROOT, readJson, writeJson } from '../runtime/pat
 const marker = '--whale-approval-hook';
 const description = 'API Balance Whale approval reminder';
 const ownHook = hook => hook?.type === 'command' && typeof hook.command === 'string' &&
-  hook.command.includes('/scripts/approval-request-hook.mjs') && hook.command.includes(marker);
-const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
+  hook.command.replaceAll('\\', '/').includes('/scripts/approval-request-hook.mjs') && hook.command.includes(marker);
+// Codex runs a hook with sh -lc on macOS and Linux, and with cmd.exe /C on
+// Windows, where only double quotes group words. Paths cannot hold a double quote.
+const quote = (value, platform) => platform === 'win32' ? '"' + String(value) + '"' : "'" + String(value).replaceAll("'", "'\\''") + "'";
 
 function hookFile(codexHome) { return path.join(codexHome, 'hooks.json'); }
 function readHooks(file) {
@@ -19,10 +21,10 @@ function readHooks(file) {
   return config;
 }
 
-export function installApprovalHook({ codexHome = CODEX_HOME, dataDir = DATA_HOME, nodePath = process.execPath, root = ROOT } = {}) {
+export function installApprovalHook({ codexHome = CODEX_HOME, dataDir = DATA_HOME, nodePath = process.execPath, root = ROOT, platform = process.platform } = {}) {
   const file = hookFile(codexHome);
   const config = readHooks(file);
-  const command = [nodePath, path.join(root, 'scripts', 'approval-request-hook.mjs'), marker, '--data-dir', dataDir].map(quote).join(' ');
+  const command = [nodePath, path.join(root, 'scripts', 'approval-request-hook.mjs'), marker, '--data-dir', dataDir].map(value => quote(value, platform)).join(' ');
   const prior = config.hooks.PermissionRequest || [];
   if (prior.some(group => Array.isArray(group?.hooks) && group.hooks.some(hook => ownHook(hook) && hook.command === command))) return false;
   config.hooks.PermissionRequest = prior.map(group => ({ ...group, hooks: Array.isArray(group?.hooks) ? group.hooks.filter(hook => !ownHook(hook)) : group?.hooks }))

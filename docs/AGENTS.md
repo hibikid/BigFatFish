@@ -35,6 +35,7 @@
 ## 操作
 
 - **点一行**：跳到那个会话。Codex App 的会话用 `codex://threads/<id>` 打开对应线程，打不开时只打开 Codex 应用。其余会话切到 Ghostty 里工作目录等于会话文件夹的那个终端（选中标签并聚焦）；同一文件夹开了几个标签时，优先标题里带 Claude、✳ 或 codex 的；一个都没找到就只把 Ghostty 切到前面。第一次跳转时 macOS 会问是否允许大肥鱼控制 Ghostty，之后在“系统设置 › 隐私与安全性 › 自动化”里可以改。
+  Windows 上，Codex App 的会话同样用 `codex://threads/<id>` 打开（交给系统的链接处理程序）。其余会话由 PowerShell 通过 UI Automation 在 Windows Terminal 的标签和单独的控制台窗口里找：标题里有项目名的优先，其次是标题里带 Claude、✳ 或 codex 的，选中那个标签并把窗口切到前面；一个都没找到就只把第一个终端窗口切到前面。Windows Terminal 不公开标签的文件夹，只能看标题。
 - **鼠标移到一行上停一下**：旁边弹出详情卡：项目、工具、文件夹、状态和持续时间、token 与上下文占比，以及 **跳过去**。列表变化时滑到静止鼠标下面的行不会弹出卡片。详情卡里没有移除按钮，移除只靠滑动。
 - **标题栏的图钉**：在“钉在屏幕上”和“跟着大肥鱼”之间切换。跟着时小窗挂在角色旁边空间更大的一侧。
 - **拖动标题栏**：把钉住的小窗挪到别处，位置会记住；跟着大肥鱼时拖动它会改为钉住。钉住的小窗记住离屏幕哪一边多远：在右半边就贴着右边，在左半边就贴着左边。
@@ -48,7 +49,7 @@
 
 **Codex**：额度用的同一个会话监视线程读 `~/.codex/sessions` 里的日志。`session_meta` 给出会话 ID、文件夹（`cwd`）和来源（`originator` 含 desktop 的是 Codex App）；`task_started`、`task_complete`、`turn_aborted` 给出这一轮的状态；`token_count` 的 `last_token_usage` 和 `model_context_window` 给出 token。日志每次变长都算一次进展。这一部分不受“读取本机 Codex 会话记录”开关影响，那个开关只管用量记账。
 
-Codex 的“要权限”来自已有的审批提醒 hook（`scripts/approval-request-hook.mjs`）：它现在把会话 ID 和文件夹一起交给大肥鱼，请求的命令和内容仍然不离开 hook 进程。hook 的命令行没有变，Codex 已经信任的 hook 不需要重新审核。请求两秒以后日志里出现新的 token 记录，或者这一轮结束，就算已经处理。只说了文件夹的请求算在那个文件夹里正在跑的会话上；什么都没说的请求，只有正好一个会话在跑时才算它的。
+Codex 的“要权限”来自已有的审批提醒 hook（`scripts/approval-request-hook.mjs`）。Codex 在 macOS 上用 `sh -lc`、在 Windows 上用 `cmd.exe /C` 执行 hook 命令，所以安装时 Windows 上的命令用双引号，其他系统用单引号。它现在把会话 ID 和文件夹一起交给大肥鱼，请求的命令和内容仍然不离开 hook 进程。hook 的命令行没有变，Codex 已经信任的 hook 不需要重新审核。请求两秒以后日志里出现新的 token 记录，或者这一轮结束，就算已经处理。只说了文件夹的请求算在那个文件夹里正在跑的会话上；什么都没说的请求，只有正好一个会话在跑时才算它的。
 
 **Claude Code**：接入时除了状态栏，还给这些事件装上 `scripts/claude-hook.mjs`：`SessionStart`、`UserPromptSubmit`、`Notification`、`PermissionRequest`、`Stop`、`StopFailure`、`SessionEnd`。它什么也不输出（有些事件的输出会进入对话），也从不阻止或改变 Claude 的行为。
 
@@ -60,6 +61,8 @@ Codex 的“要权限”来自已有的审批提醒 hook（`scripts/approval-req
 | `Stop` | 完成（同时照旧发出“Claude 回复完成”） |
 | `StopFailure` | 出错 |
 | `SessionEnd` | 删除这个会话 |
+
+Claude Code 在 Windows 上也通过 Git Bash 执行这些命令，所以命令统一用单引号；Windows 上的路径写成正斜杠（Git Bash 会吞掉反斜杠），并优先用 PATH 或 Program Files 里的 `node.exe`。
 
 状态栏脚本同时记下每个会话 `context_window.current_usage` 的 token 和 `used_percentage`。提问或权限之后两秒以上 token 又变了，就算已经回答，回到处理中。子代理的事件不记录。
 
@@ -75,11 +78,13 @@ Codex 的“要权限”来自已有的审批提醒 hook（`scripts/approval-req
 
 ## 限制
 
-- 精确跳转只支持 macOS 上的 Ghostty 1.3 及以上（AppleScript）。在 tmux 里运行的会话只能跳到 tmux 所在的标签。
+- macOS 上按文件夹精确跳转只支持 Ghostty 1.3 及以上（AppleScript）。在 tmux 里运行的会话只能跳到 tmux 所在的标签。
+- Windows 上只能按标题找标签：Claude Code 的标题一般带 ✳ 但不带项目名，开着几个 Claude 标签时可能选中其中任意一个；不设标题的工具往往只能把终端窗口切到前面。VS Code 等编辑器里的终端不在范围内。
+- Windows 部分（hook 命令、跳转）目前只有单元测试，还没有在 Windows 实机上验证；验证步骤和每条推断的依据见 [Windows 适配交接](WINDOWS-PORT.md)。
 - 同一文件夹里同一工具开着几个会话时，可能跳到其中任意一个。
 - 在 Claude Code 里按 Esc 拒绝权限不会触发 `Stop`，这一行会保持黄色，直到下一条消息或把它滑走。
 - 没有正常退出的 Claude Code 会话（例如直接关掉终端而没有触发 `SessionEnd`）会作为空闲行留着，一天没有动静后自动清掉，也可以滑走。
 
 ## 验证
 
-`node --test tests/agents.test.mjs tests/claude-usage.test.mjs tests/approval-hook.test.mjs`、`npm test`、`npm run check`、`npm run test:desktop`。测试用合成的会话文件和日志行；桌面测试里的跳转被替换成记录，不会碰任何终端。
+`node --test tests/agents.test.mjs tests/claude-usage.test.mjs tests/approval-hook.test.mjs`、`npm test`、`npm run check`、`npm run test:desktop`。测试用合成的会话文件和日志行；桌面测试里的跳转被替换成记录，不会碰任何终端。Windows 的命令写法和跳转脚本的参数由单元测试检查，PowerShell 脚本本身要在 Windows 上实际运行才能确认。
