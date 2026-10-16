@@ -978,6 +978,21 @@
       }).catch(function (error) { assetNotice(error.message); });
     });
     secDesk.appendChild(row9);
+    // The task window lives in desktop/ui/agents.js; the menu only switches it.
+    var agentsApi = window.WhaleAgents;
+    if (agentsApi) {
+      var agentsToggle = document.createElement('input');
+      agentsToggle.type = 'checkbox';
+      agentsToggle.className = 'dshwv-check';
+      agentsToggle.checked = agentsApi.enabled();
+      agentsToggle.title = '常驻的小窗：每个 Claude Code 和 Codex 会话一行，点一行跳到它的 Ghostty 标签';
+      agentsToggle.addEventListener('change', function () { agentsApi.setEnabled(agentsToggle.checked); });
+      window.addEventListener('whale-agents', function (e) { agentsToggle.checked = !!e.detail.on; });
+      var rowAgents = menuRow();
+      rowAgents.appendChild(menuLabel('任务小窗'));
+      rowAgents.appendChild(agentsToggle);
+      secDesk.appendChild(rowAgents);
+    }
     var rowSnap = menuRow();
     var snapRowLabel = document.createElement('span');
     snapRowLabel.textContent = '吸附与翻转';

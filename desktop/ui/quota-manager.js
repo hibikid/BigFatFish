@@ -107,10 +107,14 @@ export function createQuotaManager({ dialog, request, money, presentation, toast
     section.append(subscriptionCard('codex', codex ? presentation.title(codex) : 'Codex 订阅',
       [...codexLines, line(['来自本机 Codex 会话记录', updated(codex)].filter(Boolean).join(' · '))], [toggle]));
     const claudeLines = claude?.available ? quotaLines(claude) : [];
-    const connected = integration.installed ? '已接入 Claude Code' : integration.statusLine === 'other' ? 'Claude Code 已有别的状态栏命令，未接入' : '未接入 Claude Code';
-    const action = integration.installed ? button('移除接入', 'quiet', async () => { await request('/api/claude/integration', 'POST', { action: 'uninstall' }); toast('已移除 Claude Code 接入'); await changed(); }) :
-      button('接入 Claude Code', 'primary', async () => { await request('/api/claude/integration', 'POST', { action: 'install' }); toast('已接入，Claude Code 下次刷新状态栏时开始显示额度'); await changed(); });
-    section.append(subscriptionCard('claude', 'Claude 订阅', [...claudeLines, line([connected, updated(claude)].filter(Boolean).join(' · '), !integration.installed)], [action]));
+    // An install from before the task window lacks the hooks that tell what each session is doing.
+    const outdated = integration.installed && !integration.tracking;
+    const connected = outdated ? '已接入 Claude Code，任务小窗需要更新接入' : integration.installed ? '已接入 Claude Code' : integration.statusLine === 'other' ? 'Claude Code 已有别的状态栏命令，未接入' : '未接入 Claude Code';
+    const install = (label, kind, done) => button(label, kind, async () => { await request('/api/claude/integration', 'POST', { action: 'install' }); toast(done); await changed(); });
+    const actions = integration.installed ? [button('移除接入', 'quiet', async () => { await request('/api/claude/integration', 'POST', { action: 'uninstall' }); toast('已移除 Claude Code 接入'); await changed(); })] :
+      [install('接入 Claude Code', 'primary', '已接入，Claude Code 下次刷新状态栏时开始显示额度')];
+    if (outdated) actions.unshift(install('更新接入', 'primary', '已更新，Claude Code 会话下次发消息或回复完成时出现在任务小窗里'));
+    section.append(subscriptionCard('claude', 'Claude 订阅', [...claudeLines, line([connected, updated(claude)].filter(Boolean).join(' · '), !integration.installed || outdated)], actions));
     return section;
   }
 

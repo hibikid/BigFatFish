@@ -37,12 +37,13 @@ try {
   assert.equal(installed.hooks.PermissionRequest.length, 1);
   assert.match(installed.hooks.PermissionRequest[0].hooks[0].command, /approval-request-hook\.mjs/);
 
-  let notices = 0;
+  let notices = 0, asked = null;
   bridge = await startBridge({ dispatch: async () => { throw new Error('unexpected public route'); } }, {
-    dataDir, onApprovalRequest: () => { notices++; },
+    dataDir, onApprovalRequest: info => { notices++; asked = info; },
   });
-  await runHook({ hook_event_name: 'PermissionRequest', session_id: 'test-session', tool_input: { command: 'private text must stay in the hook process' } });
+  await runHook({ hook_event_name: 'PermissionRequest', session_id: 'test-session', cwd: '/work/api', tool_input: { command: 'private text must stay in the hook process' } });
   assert.equal(notices, 1);
+  assert.deepEqual(asked, { sessionId: 'test-session', cwd: '/work/api' }, 'only which session asks reaches the pet');
   await runHook({ hook_event_name: 'PostToolUse' });
   assert.equal(notices, 1);
 

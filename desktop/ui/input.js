@@ -5,7 +5,7 @@
   const pet = document.querySelector('.dshwv-img'), root = document.querySelector('.dshwv-root');
   const failedRoleSources = new Set();
   let point = { x: -1, y: -1 }, heldPointer = null, releaseEpoch = 0, interactive = false, keyboardFocus = false, ready = false, lastStorage = '';
-  const surfaces = 'dialog[open],.chat-composer,.chat-reply,.dshwv-meter-head,.quota-overview,.dshwv-menu,.dshwv-menu-btn,.dshwv-rolelist,.dshwv-audiolist,[class*="mask"],.dshwv-custmenu,.dshwv-custbtn,.dshwv-fxinfo,.dshwv-fxicon,#toast:not([hidden])';
+  const surfaces = 'dialog[open],.chat-composer,.chat-reply,.dshwv-meter-head,.quota-overview,.dshwv-menu,.dshwv-menu-btn,.dshwv-rolelist,.dshwv-audiolist,[class*="mask"],.dshwv-custmenu,.dshwv-custbtn,.dshwv-fxinfo,.dshwv-fxicon,.agents-mini,.agents-detail:not([hidden]),#toast:not([hidden])';
   const keyboardSurfaces = 'dialog[open],.chat-composer,.dshwv-menu,.dshwv-rolelist,.dshwv-audiolist,[class*="mask"],.dshwv-custmenu';
   function visible(el) { return el.checkVisibility({ opacityProperty: true, visibilityProperty: true }); }
   function contains(el, p) { const r = el.getBoundingClientRect(); return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom; }

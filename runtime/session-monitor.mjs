@@ -27,10 +27,10 @@ export function normalizeSubscriptionRateLimits(value, observedAt = Date.now()) 
 }
 
 export class SessionParser {
-  constructor({ id, defaultModel = '', onStart = () => {}, onEnd = () => {}, onUpdate = () => {}, onRateLimits = () => {}, onRateLimitContext = () => {}, recoverIds = [] }) {
+  constructor({ id, defaultModel = '', onStart = () => {}, onEnd = () => {}, onUpdate = () => {}, onRateLimits = () => {}, onRateLimitContext = () => {}, onSession = () => {}, recoverIds = [] }) {
     this.id = id; this.model = ['__proto__', 'prototype', 'constructor'].includes(defaultModel) ? '' : defaultModel;
-    this.onStart = onStart; this.onEnd = onEnd; this.onUpdate = onUpdate; this.onRateLimits = onRateLimits; this.onRateLimitContext = onRateLimitContext;
-    this.total = null; this.active = null; this.priming = false;
+    this.onStart = onStart; this.onEnd = onEnd; this.onUpdate = onUpdate; this.onRateLimits = onRateLimits; this.onRateLimitContext = onRateLimitContext; this.onSession = onSession;
+    this.total = null; this.active = null; this.priming = false; this.view = null;
     this.identity = null; this.skipHistory = 0; this.completed = new Set();
     this.recoverIds = new Set(recoverIds); this.recoverySeen = new Set(); this.rateLimitsKey = '';
   }
@@ -44,7 +44,9 @@ export class SessionParser {
       // This is the configured provider *name* written by Codex, not a URL or
       // credential. It lets the local ledger attribute a session to one of the
       // user's named config files without reading prompts or environment data.
-      modelProvider: typeof meta.model_provider === 'string' ? meta.model_provider.slice(0, 128) : '' };
+      modelProvider: typeof meta.model_provider === 'string' ? meta.model_provider.slice(0, 128) : '',
+      // The project folder, and whether the Codex app runs the session rather than the CLI.
+      cwd: typeof meta.cwd === 'string' ? meta.cwd.slice(0, 4096) : '', app: /desktop/i.test(String(meta.originator || '')) };
     this.skipHistory = Number.isSafeInteger(meta.subagent_history_start_ordinal) ? Math.max(0, meta.subagent_history_start_ordinal) : 0;
   }
   prime(lines) {
@@ -55,6 +57,21 @@ export class SessionParser {
       if (!this.active.recoverable) { this.active.byModel = {}; this.active.partial = true; }
       this.onStart({ ...this.active });
     }
+    if (this.view?.state) this.onSession({ ...this.view });
+  }
+  // What the session is doing now, for the task window: its folder, the state
+  // of its latest turn and the tokens in its context. `eventAt` is the last
+  // logged event and `activeAt` the last time the log grew at all.
+  see(change, at) {
+    if (!this.identity) return;
+    const { sessionId, cwd, app, isSubagent, parentThreadId } = this.identity;
+    this.view ||= { sessionId, cwd, app, isSubagent, parentThreadId, state: null, since: null, startedAt: null, tokens: null, contextWindow: null, eventAt: 0, activeAt: 0 };
+    Object.assign(this.view, change);
+    if (Number.isFinite(at)) { this.view.eventAt = Math.max(this.view.eventAt, at); this.view.activeAt = Math.max(this.view.activeAt, at); }
+    if (!this.priming) this.onSession({ ...this.view });
+  }
+  touch(at) {
+    if (this.view?.state && !this.priming && at > this.view.activeAt) { this.view.activeAt = at; this.onSession({ ...this.view }); }
   }
   accept(line) {
     if (this.skipHistory > 0) { this.skipHistory--; return; }
@@ -65,6 +82,7 @@ export class SessionParser {
     if (d.type === 'session_meta') { this.identify(p); return; }
     if (d.type === 'turn_context') {
       if (typeof p.model === 'string' && !['__proto__', 'prototype', 'constructor'].includes(p.model)) this.model = p.model;
+      if (typeof p.cwd === 'string' && p.cwd && p.cwd !== (this.view?.cwd ?? this.identity?.cwd)) this.see({ cwd: p.cwd.slice(0, 4096) });
       if (this.active && (!p.turn_id || p.turn_id === this.active.turnId)) {
         this.active.rootTurnId = p.root_turn_id || this.active.turnId;
         if (!this.priming) this.onUpdate({ ...this.active });
@@ -86,6 +104,9 @@ export class SessionParser {
       this.active.recoverable = this.recoverIds.has(this.active.id);
       if (this.active.recoverable) this.recoverySeen.add(this.active.id);
       if (!this.priming) this.onStart({ ...this.active });
+      const window = Number(p.model_context_window);
+      this.see({ state: 'running', since: this.active.startedAt, startedAt: this.active.startedAt,
+        ...(window > 0 ? { contextWindow: window } : {}) }, this.active.ts);
       return;
     }
     if (p.type === 'token_count') {
@@ -99,6 +120,10 @@ export class SessionParser {
         if (key !== this.rateLimitsKey) { this.rateLimitsKey = key; this.onRateLimits(limits); }
       }
       if (!p.info?.total_token_usage) return;
+      // The last request's tokens are what the conversation holds now.
+      const last = p.info.last_token_usage, window = Number(p.info.model_context_window);
+      const inContext = Number(last?.total_tokens) || (Number(last?.input_tokens) || 0) + (Number(last?.output_tokens) || 0);
+      this.see({ ...(inContext > 0 ? { tokens: inContext } : {}), ...(window > 0 ? { contextWindow: window } : {}) }, observedAt);
       const next = normalize(p.info.total_token_usage);
       let delta = zero();
       if (this.total) {
@@ -127,6 +152,7 @@ export class SessionParser {
       notify: !this.priming && outcome === 'completed' && !this.active.isSubagent,
       statusNotify: !this.priming && ['failed', 'aborted'].includes(outcome) && !this.active.isSubagent };
     this.active = null; this.completed.add(completed.turnId);
+    if (outcome !== 'superseded') this.see({ state: { completed: 'done', failed: 'failed', aborted: 'aborted' }[outcome], since: ts }, ts);
     if (this.completed.size > 8192) this.completed.delete(this.completed.values().next().value);
     if (!this.priming || completed.recoverable) this.onEnd(completed);
   }
@@ -153,13 +179,13 @@ function sessionFiles(root, recoverIds = []) {
 
 // Synchronous scanning is confined to the worker or isolated replay tests.
 export class SessionReader {
-  constructor({ root, defaultModel = '', onStart = () => {}, onEnd = () => {}, onUpdate = () => {}, onRateLimits = () => {}, onRateLimitContext = () => {}, discoverMs = 3000, recoverIds = [] }) {
-    Object.assign(this, { root, defaultModel, onStart, onEnd, onUpdate, onRateLimits, onRateLimitContext, discoverMs, recoverIds });
+  constructor({ root, defaultModel = '', onStart = () => {}, onEnd = () => {}, onUpdate = () => {}, onRateLimits = () => {}, onRateLimitContext = () => {}, onSession = () => {}, discoverMs = 3000, recoverIds = [] }) {
+    Object.assign(this, { root, defaultModel, onStart, onEnd, onUpdate, onRateLimits, onRateLimitContext, onSession, discoverMs, recoverIds });
     this.files = new Map(); this.lastDiscovery = 0; this.error = '';
   }
   add(info, initial) {
     const parser = new SessionParser({ id: path.basename(info.file, '.jsonl'), defaultModel: this.defaultModel,
-      onStart: this.onStart, onEnd: this.onEnd, onUpdate: this.onUpdate, onRateLimits: this.onRateLimits, onRateLimitContext: this.onRateLimitContext, recoverIds: this.recoverIds });
+      onStart: this.onStart, onEnd: this.onEnd, onUpdate: this.onUpdate, onRateLimits: this.onRateLimits, onRateLimitContext: this.onRateLimitContext, onSession: this.onSession, recoverIds: this.recoverIds });
     const fd = fs.openSync(info.file, 'r');
     try {
       const head = Buffer.alloc(Math.min(info.size, 1024 * 1024));
@@ -214,14 +240,15 @@ export class SessionReader {
       state.parser.accept(line);
     }
     if (state.pending.length > 8 * 1024 * 1024) { state.pending = ''; state.skipLine = true; }
+    state.parser.touch(Date.now());
   }
   status() { return { watching: this.files.size, error: this.error, catchingUp: [...this.files.values()].some(s => s.more),
     recoverySeen: [...new Set([...this.files.values()].flatMap(s => [...s.parser.recoverySeen]))] }; }
 }
 
 export class SessionMonitor {
-  constructor(service, { intervalMs = 750, discoverMs = 3000 } = {}) {
-    Object.assign(this, { service, intervalMs, discoverMs });
+  constructor(service, { intervalMs = 750, discoverMs = 3000, onSession = () => {} } = {}) {
+    Object.assign(this, { service, intervalMs, discoverMs, onSession });
     this.pending = new Set(); this.snapshot = { watching: 0, error: '', initializing: true }; this.stopped = false;
   }
   start() {
@@ -246,6 +273,7 @@ export class SessionMonitor {
         else if (item.type === 'update') this.service.updateTurn?.(item.meta);
         else if (item.type === 'rate-limits') this.service.updateSubscriptionRateLimits?.(item.snapshot);
         else if (item.type === 'rate-limit-context') this.service.updateSubscriptionRateLimitContext?.(item.context);
+        else if (item.type === 'session') this.onSession(item.view);
         else this.dispatch(item.meta);
       }
       if (message.recoveryComplete) this.service.finishMissingRecovery?.(message.status?.recoverySeen || []);

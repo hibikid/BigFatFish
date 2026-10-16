@@ -9,9 +9,11 @@ if (process.argv.includes('--whale-approval-hook') && dataDir) {
       input += part;
       if (input.length > 65536) throw new Error('hook input too large');
     }
-    if (JSON.parse(input).hook_event_name === 'PermissionRequest') {
+    const event = JSON.parse(input);
+    if (event.hook_event_name === 'PermissionRequest') {
+      // Only which session asks leaves this process, never what it asks for.
       await bridgeRequest('/internal/approval-request', {
-        method: 'POST', body: { event: 'PermissionRequest' }, dataDir, timeoutMs: 1200,
+        method: 'POST', body: { event: 'PermissionRequest', sessionId: event.session_id, cwd: event.cwd }, dataDir, timeoutMs: 1200,
       });
     }
   } catch {

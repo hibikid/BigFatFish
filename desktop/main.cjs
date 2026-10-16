@@ -82,7 +82,8 @@ function flushCommands() {
   for (const command of pendingCommands.splice(0)) window.webContents.send('whale-command', command);
   if (pendingApprovalNotice) { pendingApprovalNotice = false; window.webContents.send('whale-approval-request'); }
 }
-function notifyApprovalRequest() {
+function notifyApprovalRequest(info = {}) {
+  try { dispatcher?.agents?.codexApproval(info); } catch {}
   if (!window || window.isDestroyed() || Date.now() - lastApprovalNoticeAt < 750) return;
   lastApprovalNoticeAt = Date.now();
   show();

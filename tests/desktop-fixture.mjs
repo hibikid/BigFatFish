@@ -6,8 +6,12 @@ import { ConfigStore } from '../runtime/config.mjs';
 import { WhaleService } from '../runtime/service.mjs';
 import { saveClaudeTurn, saveClaudeUsage } from '../runtime/claude-usage.mjs';
 import { bridgeRequest } from '../runtime/bridge.mjs';
+import { writeJson } from '../runtime/paths.mjs';
+import { claudeFiles, recordClaudeHook } from '../runtime/agents/claude-hooks.mjs';
 
 let clockOffset = 0;
+// Sessions the task window was asked to go to; no terminal is touched.
+const agentJumps = [];
 
 export async function makeFixture(dataDir, { secretVault = null } = {}) {
   const codexHome = process.env.CODEX_HOME;
@@ -60,7 +64,15 @@ export async function makeFixture(dataDir, { secretVault = null } = {}) {
     }, cancel() { clearTimeout(timer); } });
     return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
   };
-  return { service, claudeHome: path.join(dataDir, 'claude-home'), monitor: false, autoRefresh: false, chatFetchImpl, chatActivityOptions: { now: () => Date.now() + clockOffset }, fxFetchImpl: async () => Response.json({ amount: 1, base: 'USD', date: new Date().toISOString().slice(0, 10), rates: { CNY: 7 } }) };
+  // Two Claude Code sessions for the task window: one asking a question, one
+  // finished. The finished one is written directly, as a Stop hook would also
+  // announce a finished reply.
+  const now = Date.now(), ask = { session_id: 'fixture-ask', cwd: '/fixture/whale-widget' };
+  recordClaudeHook(dataDir, { ...ask, hook_event_name: 'UserPromptSubmit' }, now - 120000);
+  recordClaudeHook(dataDir, { ...ask, hook_event_name: 'Notification', notification_type: 'elicitation_dialog' }, now - 60000);
+  writeJson(claudeFiles(dataDir, 'fixture-done').state, { tool: 'claude', sessionId: 'fixture-done', cwd: '/fixture/paper-notes', state: 'done', since: now - 300000, startedAt: now - 600000 });
+  return { service, claudeHome: path.join(dataDir, 'claude-home'), monitor: false, autoRefresh: false, chatFetchImpl,
+    agentJump: async row => { agentJumps.push(row.id); return { ok: true, target: 'tab' }; }, chatActivityOptions: { now: () => Date.now() + clockOffset }, fxFetchImpl: async () => Response.json({ amount: 1, base: 'USD', date: new Date().toISOString().slice(0, 10), rates: { CNY: 7 } }) };
 }
 
 function wav() {
@@ -192,6 +204,68 @@ export async function verifyDesktop({ app, window, dispatcher, dataDir, errors, 
     await dispatcher.close();
     app.quit();
     return;
+  }
+
+  if (phase !== 'restart') {
+    // The task window: on by default in the top right corner, the session
+    // waiting for the user first, then the running one, then the finished one.
+    const at = Date.now();
+    dispatcher.agents.codexSession({ sessionId: 'fixture-codex', cwd: '/fixture/api-server', app: false, isSubagent: false, parentThreadId: null,
+      state: 'running', since: at - 360000, startedAt: at - 360000, tokens: 64500, contextWindow: 258400, eventAt: at, activeAt: at });
+    const agentRows = "JSON.stringify([...document.querySelectorAll('.agents-row')].map(row => row.dataset.id))";
+    await until(`${agentRows} === '["claude:fixture-ask","codex:fixture-codex","claude:fixture-done"]'`, 'the task window did not list the sessions by urgency');
+    assert.equal(await js("(() => { const r = document.querySelector('.agents-mini').getBoundingClientRect(); return Math.round(innerWidth - r.right) === 16 && Math.round(r.top) === 44; })()"), true, 'the task window sits in the top right corner');
+    assert.deepEqual(await js("[...document.querySelectorAll('.agents-row')].map(row => row.querySelector('.agents-state').textContent + ' ' + row.querySelector('.agents-tok').textContent)"), ['提问 ', '处理中 6m 64.5k', '完成 ']);
+    await capture('agents-panel');
+    await click('.agents-row[data-id="claude:fixture-done"]');
+    for (let i = 0; !agentJumps.length && i < 50; i++) await delay(100);
+    assert.deepEqual(agentJumps, ['claude:fixture-done']);
+    await delay(2500);
+    assert.ok((await js(agentRows)).includes('fixture-done'), 'going to a finished row does not remove it');
+    // Swiping removes a row: a drag with the mouse, or two fingers on a trackpad.
+    // A short drag springs back and is not a click.
+    const swipe = (id, distance) => js(`(() => { const row = document.querySelector('.agents-row[data-id="${id}"]'), r = row.getBoundingClientRect(), y = r.y + r.height / 2;
+      const at = (type, x) => new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 7, pointerType: 'mouse', isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y });
+      const x = r.x + r.width / 2;
+      row.dispatchEvent(at('pointerdown', x));
+      for (const step of [10, 20, 40, 70, ${distance}]) if (Math.abs(step) <= Math.abs(${distance})) row.dispatchEvent(at('pointermove', x + Math.sign(${distance}) * Math.abs(step)));
+      row.dispatchEvent(at('pointerup', x + ${distance})); })()`);
+    await swipe('codex:fixture-codex', -40);
+    await delay(400);
+    assert.ok((await js(agentRows)).includes('fixture-codex'), 'a short drag springs back');
+    assert.equal(await js("document.querySelector('.agents-row[data-id=\"codex:fixture-codex\"]').style.transform"), 'translateX(0px)');
+    assert.deepEqual(agentJumps, ['claude:fixture-done'], 'a drag is not a click');
+    await swipe('claude:fixture-done', 160);
+    await until(`!${agentRows}.includes('fixture-done')`, 'a row dragged sideways did not go');
+    assert.equal(JSON.parse((await dispatcher.dispatch('/api/agents')).body).rows.some(row => row.id === 'claude:fixture-done'), false, 'a swiped row stays away');
+    dispatcher.agents.codexSession({ sessionId: 'fixture-swipe', cwd: '/fixture/notes', app: true, isSubagent: false, parentThreadId: null,
+      state: 'done', since: at - 60000, startedAt: at - 120000, tokens: 1200, contextWindow: 258400, eventAt: at, activeAt: at });
+    await until(`${agentRows}.includes('fixture-swipe')`, 'a new row did not appear');
+    await js(`(() => { const row = document.querySelector('.agents-row[data-id="codex:fixture-swipe"]');
+      for (let i = 0; i < 6; i++) row.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaX: 30, deltaY: 2 })); })()`);
+    await until(`!${agentRows}.includes('fixture-swipe')`, 'a two-finger swipe did not remove the row');
+    const point = await js("(() => { const r = document.querySelector('.agents-row').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()");
+    setTestCursor(point);
+    window.webContents.sendInputEvent({ type: 'mouseMove', ...point });
+    await until("!document.querySelector('.agents-detail').hidden && document.querySelector('.agents-detail h4').textContent === 'whale-widget'", 'resting on a row did not show its card');
+    assert.equal(await js("document.querySelectorAll('.agents-detail button').length"), 1, 'the card only goes to the session; removing is a swipe');
+    assert.equal(await js("(() => { const card = document.querySelector('.agents-detail').getBoundingClientRect(), box = document.querySelector('.agents-mini').getBoundingClientRect(); return card.right <= box.left && card.left >= 0; })()"), true, 'the card sits beside the panel, on the screen');
+    await capture('agents-card');
+    await click('.agents-head .agents-btn[aria-label="收起"]');
+    await until("document.querySelector('.agents-mini').classList.contains('agents-folded')", 'the task window did not fold');
+    assert.equal(await js("Math.round(innerWidth - document.querySelector('.agents-mini').getBoundingClientRect().right)"), 16, 'the folded strip stays against the right edge');
+    await click('.agents-pill');
+    await until("!document.querySelector('.agents-mini').classList.contains('agents-folded')", 'the folded task window did not open again');
+    await js('window.__whaleRenderTest.close(); window.__whaleRenderTest.place(600, 300, false)');
+    await click('.dshwv-menu-btn');
+    await until("document.querySelector('.dshwv-menu').classList.contains('dshwv-menu-open')", 'the menu did not open for the task window');
+    const agentsSwitch = "[...document.querySelectorAll('.dshwv-menu-row')].find(el => el.textContent.includes('任务小窗')).querySelector('input')";
+    await js(`${agentsSwitch}.click()`);
+    await until("!document.querySelector('.agents-mini') && JSON.parse(localStorage.getItem('dshw-agents')).on === false", 'turning the task window off did not remove it');
+    await js(`${agentsSwitch}.click()`);
+    await until("!!document.querySelector('.agents-row')", 'turning the task window on did not bring it back');
+    await js("document.querySelector('.dshwv-menu-btn').click()");
+    passed.push('the task window lists sessions by urgency in the top right, goes to one on a click, removes one on a swipe, shows its card, folds to the right and switches from the menu');
   }
 
   if (phase === 'restart') {

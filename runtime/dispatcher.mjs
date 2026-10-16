@@ -13,6 +13,8 @@ import { ChatService } from './chat/service.mjs';
 import { claudeLastTurn, claudeSubscription } from './claude-usage.mjs';
 import { QuotaBook } from './quota/book.mjs';
 import { claudeIntegrationStatus, configureClaudeStatusline } from './claude-integration.mjs';
+import { AgentBoard } from './agents/board.mjs';
+import { jumpTo } from './agents/jump.mjs';
 
 export const UI_ORIGIN = 'whale://widget';
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.gif': 'image/gif', '.mp3': 'audio/mpeg' };
@@ -25,7 +27,7 @@ async function change(work) {
 }
 
 // Dispatch original resource handlers entirely in process; no HTTP listener exists.
-export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(os.homedir(), '.claude'), service = null, secretVault = null, monitor = true, autoRefresh = true, fetchImpl, fxFetchImpl = fetchImpl, chatFetchImpl = fetchImpl, chatActivityOptions = {}, onStop = () => {}, onShow = () => {}, onChatNotice = () => {}, statusInfo = () => ({}) } = {}) {
+export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(os.homedir(), '.claude'), service = null, secretVault = null, monitor = true, autoRefresh = true, fetchImpl, fxFetchImpl = fetchImpl, chatFetchImpl = fetchImpl, chatActivityOptions = {}, onStop = () => {}, onShow = () => {}, onChatNotice = () => {}, statusInfo = () => ({}), agentJump = jumpTo, agentOptions = {} } = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
   migrateData(dataDir);
   const whale = service || new WhaleService({ dataDir, secretVault, ...(fetchImpl ? { fetchImpl } : {}) });
@@ -41,7 +43,9 @@ export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(o
   const book = new QuotaBook({ whale, billing: ({ start = false } = {}) => start && !closing ? chatService().billing : chat?.billing });
   whale.onTurnEnd = turn => book.codexTurn(turn);
   whale.petUsedDuring = (context, from, to) => !!chat?.billing.usedBetween({ baseUrl: context.baseUrl, key: context.key }, from, to);
-  const watcher = monitor ? new SessionMonitor(whale) : null;
+  // The task window: what each Claude Code and Codex session is doing.
+  const agents = new AgentBoard({ dataDir, ...agentOptions });
+  const watcher = monitor ? new SessionMonitor(whale, { onSession: view => agents.codexSession(view) }) : null;
   watcher?.start();
   const timer = autoRefresh ? setInterval(() => book.refresh().catch(() => {}), 60000) : null;
   timer?.unref();
@@ -114,6 +118,16 @@ export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(o
         });
         return jsonResult(405, { ok: false });
       }
+      if (url.pathname === '/api/agents' && method === 'GET') return jsonResult(200, { ok: true, rows: agents.rows(), watching: !!watcher,
+        claude: claudeIntegrationStatus({ claudeHome }), limits: { claude: claudeSubscription(dataDir), codex: whale.subscriptionRateLimits() } });
+      const agentRoute = url.pathname.match(/^\/api\/agents\/(jump|hide)$/);
+      if (agentRoute && method === 'POST') {
+        const id = parsed()?.id, row = typeof id === 'string' ? agents.find(id) : null;
+        if (!row) return jsonResult(404, { ok: false, error: '这个会话已经不在了' });
+        if (agentRoute[1] === 'hide') return jsonResult(200, { ok: agents.hide(id) });
+        const result = await agentJump(row);
+        return jsonResult(result.ok ? 200 : 400, result);
+      }
       if (url.pathname === '/api/fx/usd-cny') {
         if (method !== 'GET') return jsonResult(405, { ok: false });
         const manual = url.searchParams.get('refresh') === '1';
@@ -142,7 +156,7 @@ export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(o
       }
       if (url.pathname === '/api/show' && method === 'POST') { onShow(); return jsonResult(200, { ok: true, desktop: 'shown' }); }
       if (url.pathname === '/api/stop' && method === 'POST') { setTimeout(onStop, 100); return jsonResult(200, { ok: true }); }
-      const uiFiles = { '/': 'widget.html', '/widget.html': 'widget.html', '/toast.js': 'toast.js', '/quota-manager.js': 'quota-manager.js', '/ui.css': 'ui.css', '/render.js': 'render.js', '/input.js': 'input.js', '/alpha-worker.js': 'alpha-worker.js', '/money.js': 'money.js', '/media-guard.js': 'media-guard.js', '/turn-notice.js': 'turn-notice.js', '/usage-client.js': 'usage-client.js', '/bubble-queue.js': 'bubble-queue.js', '/pet-geometry.js': 'pet-geometry.js', '/usage-presentation.js': 'usage-presentation.js', '/quota-presentation.js': 'quota-presentation.js', '/quota-view.js': 'quota-view.js', '/quota.js': 'quota.js', '/quota.css': 'quota.css', '/companion-display.js': 'companion-display.js', '/chat.js': 'chat.js', '/chat-client.js': 'chat-client.js', '/chat-billing.js': 'chat-billing.js', '/chat.css': 'chat.css', '/theme.css': 'theme.css', '/theme.js': 'theme.js', '/pet.css': 'pet.css' };
+      const uiFiles = { '/': 'widget.html', '/widget.html': 'widget.html', '/toast.js': 'toast.js', '/quota-manager.js': 'quota-manager.js', '/ui.css': 'ui.css', '/render.js': 'render.js', '/input.js': 'input.js', '/alpha-worker.js': 'alpha-worker.js', '/money.js': 'money.js', '/media-guard.js': 'media-guard.js', '/turn-notice.js': 'turn-notice.js', '/usage-client.js': 'usage-client.js', '/bubble-queue.js': 'bubble-queue.js', '/pet-geometry.js': 'pet-geometry.js', '/usage-presentation.js': 'usage-presentation.js', '/quota-presentation.js': 'quota-presentation.js', '/quota-view.js': 'quota-view.js', '/quota.js': 'quota.js', '/quota.css': 'quota.css', '/companion-display.js': 'companion-display.js', '/chat.js': 'chat.js', '/chat-client.js': 'chat-client.js', '/chat-billing.js': 'chat-billing.js', '/chat.css': 'chat.css', '/theme.css': 'theme.css', '/theme.js': 'theme.js', '/pet.css': 'pet.css', '/agents.js': 'agents.js', '/agents.css': 'agents.css' };
       let file;
       if (Object.hasOwn(uiFiles, url.pathname)) file = path.join(ROOT, 'desktop', 'ui', uiFiles[url.pathname]);
       else if (url.pathname === '/lib/event-stream.js' || /^\/vendor\/eventsource-parser\/dist\/(index|parse|errors|types|stream)\.js$/.test(url.pathname)) file = path.join(ROOT, url.pathname.slice(1));
@@ -192,5 +206,5 @@ export function createDispatcher({ dataDir = DATA_HOME, claudeHome = path.join(o
     try { const config = whale.config.resolve(); return { id: config.id, model: config.model, providerName: config.providerName, baseUrl: config.baseUrl }; }
     catch { return {}; }
   }
-  return { dispatch, whale, book, watcher, close };
+  return { dispatch, whale, book, watcher, agents, close };
 }

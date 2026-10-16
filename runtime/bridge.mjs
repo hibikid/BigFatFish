@@ -44,7 +44,9 @@ export async function startBridge(dispatcher, { dataDir = DATA_HOME, onApprovalR
         const candidate = Buffer.from(typeof message.token === 'string' ? message.token : '');
         if (candidate.length !== token.length || !crypto.timingSafeEqual(candidate, Buffer.from(token))) throw new Error('unauthorized');
         if (message.route === '/internal/approval-request' && message.method === 'POST' && onApprovalRequest && message.body?.event === 'PermissionRequest') {
-          onApprovalRequest();
+          // Which session asks, so the task window can mark it; nothing else is passed on.
+          const { sessionId, cwd } = message.body;
+          onApprovalRequest({ sessionId: typeof sessionId === 'string' ? sessionId.slice(0, 200) : '', cwd: typeof cwd === 'string' ? cwd.slice(0, 4096) : '' });
           if (!socket.destroyed) socket.end(JSON.stringify({ status: 200, payload: { ok: true } }) + '\n');
           return;
         }

@@ -8,6 +8,8 @@ import { captureClaudeUsage, claudeSubscription, saveClaudeUsage } from '../runt
 import { configureClaudeStatusline } from '../scripts/configure-claude-statusline.mjs';
 import { createDispatcher } from '../runtime/dispatcher.mjs';
 import { bridgeRequest, startBridge } from '../runtime/bridge.mjs';
+import { claudeIntegrationStatus } from '../runtime/claude-integration.mjs';
+import { CLAUDE_TRACKED_EVENTS } from '../runtime/agents/claude-hooks.mjs';
 
 const sample = now => ({ session_id: 'private-session', transcript_path: '/private/chat.jsonl',
   model: { display_name: 'Sonnet' }, rate_limits: {
@@ -118,8 +120,25 @@ test('installer preserves unrelated settings, rejects another status line and re
   assert.match(installed.statusLine.command, /claude-statusline\.mjs/);
   assert.equal(installed.hooks.Stop.length, 2);
   assert.equal(installed.hooks.Stop[0].hooks[0].command, 'other-script');
-  assert.match(installed.hooks.Stop[1].hooks[0].command, /claude-stop\.mjs/);
+  for (const event of CLAUDE_TRACKED_EVENTS) assert.match(installed.hooks[event].at(-1).hooks[0].command, /claude-hook\.mjs/, event);
+  assert.deepEqual(claudeIntegrationStatus({ claudeHome }), { installed: true, statusLine: 'pet', stop: true, tracking: true });
   assert.equal(configureClaudeStatusline('install', { claudeHome, dataDir: '/tmp/whale data' }), 'already-installed');
   assert.equal(configureClaudeStatusline('uninstall', { claudeHome }), 'uninstalled');
   assert.deepEqual(JSON.parse(fs.readFileSync(file)), original);
+});
+
+test('an install from before the task window is reported as outdated and updated in place', t => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-claude-upgrade-'));
+  t.after(() => fs.rmSync(claudeHome, { recursive: true, force: true }));
+  const file = path.join(claudeHome, 'settings.json'), script = name => "'" + path.resolve('scripts', name) + "'";
+  fs.writeFileSync(file, JSON.stringify({ statusLine: { type: 'command', command: "'/usr/bin/node' " + script('claude-statusline.mjs') },
+    hooks: { Stop: [{ hooks: [{ type: 'command', command: "'/usr/bin/node' " + script('claude-stop.mjs'), timeout: 5 }] }] } }));
+  assert.deepEqual(claudeIntegrationStatus({ claudeHome }), { installed: true, statusLine: 'pet', stop: true, tracking: false });
+  assert.equal(configureClaudeStatusline('install', { claudeHome, nodePath: '/usr/bin/node' }), 'installed');
+  const upgraded = JSON.parse(fs.readFileSync(file));
+  assert.equal(upgraded.hooks.Stop.length, 1, 'the old Stop hook is replaced, not doubled');
+  assert.match(upgraded.hooks.Stop[0].hooks[0].command, /claude-hook\.mjs/);
+  assert.equal(claudeIntegrationStatus({ claudeHome }).tracking, true);
+  assert.equal(configureClaudeStatusline('uninstall', { claudeHome }), 'uninstalled');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), {});
 });
