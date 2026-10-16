@@ -1,7 +1,7 @@
 {
   "name": "api-balance-whale",
   "version": "0.2.6",
-  "description": "Codex API balance desktop companion: an independent, hideable desktop pet with no standalone webpage (Codex-adapted build of dsh-whale-widget). Homepage and issues: https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget (branch For-Codex).",
+  "description": "BigFatFish: a desktop pet that watches Codex and Claude Code quota, API balances and every coding session, and chats as a character. Forked from the For-Codex branch (0.2.4) of MeteorNOX/DeepSeek-Balance-Whale-Widget.",
   "type": "module",
   "license": "MIT",
   "files": [
@@ -25,13 +25,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget.git",
+    "url": "git+https://github.com/hibikid/BigFatFish.git",
     "directory": "."
   },
   "bugs": {
-    "url": "https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/issues"
+    "url": "https://github.com/hibikid/BigFatFish/issues"
   },
-  "homepage": "https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/tree/For-Codex#readme",
+  "homepage": "https://github.com/hibikid/BigFatFish#readme",
   "engines": {
     "node": ">=24"
   },

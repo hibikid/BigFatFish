@@ -2,9 +2,9 @@
 
 ## 支持范围
 
-本分支（**For-Codex**）是为 **Windows x64 / macOS + Codex 桌面应用**适配的 `api-balance-whale` 插件。安全修复只针对本分支的最新版本（当前 `0.2.4`），不回溯旧版本。
+本仓库是大肥鱼（BigFatFish），从 MeteorNOX/DeepSeek-Balance-Whale-Widget 的 For-Codex 分支 0.2.4 分出的桌面宠物（包名 `api-balance-whale`）。安全修复只针对 `main` 分支的最新版本，不回溯旧版本。
 
-上游主分支（DSH Web 版 `dsh-whale-widget`）的问题请提到上游 issue；如果是**两者共有的代码**（例如 `assets/` 素材、前端渲染逻辑），也欢迎在本仓库提出，我们会与上游对齐。
+上游（DSH Web 版 `dsh-whale-widget`，以及上游的 Codex 版）的问题请提到上游；如果是**两者共有的代码**（例如 `assets/` 素材、前端渲染逻辑），也欢迎在本仓库提出。
 
 ## 报告漏洞
 

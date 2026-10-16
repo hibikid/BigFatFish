@@ -1,15 +1,35 @@
-# API 余额小鲸鱼 · Codex 独立桌面版
+# 大肥鱼 BigFatFish
 
-> 本仓库分支 **For-Codex**：把 [DSH 网页版小鲸鱼](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（`dsh-whale-widget`）改造成 **Codex 桌面应用**的伴随挂件。
-> ⚠️ 与主分支用途不同：**这是 Codex 桌面插件，不能用 `dsh plugin … add` 装进 DSH 网页**；反过来，主分支的 DSH 网页插件也不能在 Codex 里运行。
+一只常驻桌面的宠物，帮你盯着同时在用的几个 AI 编程工具：Codex 和 Claude Code 的订阅额度、API 余额，以及每个会话现在在做什么；它自己也能以角色人设陪你聊天、管番茄钟。支持 macOS，Windows 适配进行中。
 
-版本 **0.2.6**（Codex 特化线）。基于 MeteorNOX 的 **dsh-whale-widget 0.3.0-beta** 改编。小鲸鱼是独立常驻桌面宠物：登录后自动启动，不绑定 Codex 窗口，也不会因 Codex 最小化或退出而隐藏。可拖动并记忆位置，使用托盘菜单或快捷键随时隐藏／显示。
+## 基于谁开发
 
-**本版没有独立网页、浏览器面板或本地网页端口。** 界面由透明辅助窗口承载，通过本地进程间通信读取数据。所有菜单、设置、素材和账本都在挂件中操作。它并未修改或注入 Codex 的安装文件。
+本仓库从 **MeteorNOX** 的 [DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget) 的 **For-Codex** 分支 0.2.4（提交 `8de181a`）分出，之后独立开发。
 
-**0.2.6 本地版本**：增加独立角色会话、会话列表、DeepSeek 会话计费、Ctrl+0 快捷键，并复核订阅气泡布局。详见 [0.2.6 变更说明](docs/CHANGELOG-0.2.6.md)。此前的 [0.2.5 开发基线](docs/CHANGELOG-0.2.5.md)仍可回退。
+- 上游主线是 DeepSeek Harness 网页里的余额挂件（`dsh-whale-widget`）；For-Codex 分支把它改造成 Codex 的桌面伴随挂件（“API 余额小鲸鱼”）。角色立绘、气泡和音效素材都来自上游。
+- 0.2.4 之前的贡献者：**[@MeteorNOX](https://github.com/MeteorNOX)**（上游项目与全部基础工作）、**[@1llysviel](https://github.com/1llysviel)**（macOS 适配，[PR #128](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/pull/128)）、**Oven**、**[@Yang-huai406](https://github.com/Yang-huai406)**；历史名单见 [`docs/CHANGELOG-0.2.4.md`](docs/CHANGELOG-0.2.4.md)。
+- 上游的 Codex 版后来在 [Yang-huai406/Codex-Whale-Public](https://github.com/Yang-huai406/Codex-Whale-Public) 继续发展；本仓库从 0.2.4 起各走各的，两者互不通用。
+- 代码沿用上游的 MIT 许可与署名（见 [`LICENSE`](LICENSE)）；`assets/` 里的图片和音效不在 MIT 范围内，随项目原样分发。改造范围与许可边界见 [PROVENANCE.md](PROVENANCE.md) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，上游原版说明备份在 [docs/UPSTREAM-README.md](docs/UPSTREAM-README.md)。
 
-**安装与回滚**：macOS 见 [安装说明](docs/MACOS.md)，Windows 的安装背景见 [0.2.4 安装与回滚说明](docs/INSTALL-AND-ROLLBACK-0.2.4.md)（其中与窗口跟随有关的内容已不适用；安装与停用脚本已改名为 `scripts/install-windows.ps1`、`scripts/uninstall-windows.ps1`）。0.2.6 的验证范围和已知限制见 [本版变更说明](docs/CHANGELOG-0.2.6.md)，原有基线见 [0.2.5 验证报告](docs/VERIFICATION-0.2.5.md)。
+## 在 0.2.4 之上新增了什么
+
+- **独立桌面宠物**：不再跟着 Codex 窗口走，登录后自动出现，Codex 关了也在；能拖到屏幕最顶端，气泡改到头旁边（[ADR 0001](docs/adr/0001-retire-codex-window-follow-mode.md)）。
+- **额度管理**：一个额度簿统一管 Codex 订阅、Claude 订阅、Codex 用的 API 账户（如中转站）和大肥鱼自己的账户。角色下方的进度条显示正在用的账户、还剩多少，▾ 展开全部；有消耗速度预测、“安全额度”、消费记录和额度提醒，金额可统一换算成美元或人民币（[额度管理](docs/QUOTA.md)）。
+- **Claude Code 接入**：通过 Claude Code 官方状态栏读取 Pro/Max 的 5 小时、7 天额度，回复完成时提醒（[Claude 订阅额度接入](docs/CLAUDE-USAGE.md)）。
+- **角色会话**：右键和大肥鱼聊天，多会话、流式回复、DeepSeek 计费与余额，macOS 上 Ctrl+0 随时呼出（[角色会话](docs/CHAT.md)）。
+- **主动闲聊与番茄钟**：在你设定的时段偶尔主动搭话；说一句话就能安排专注和休息，到点提醒（[主动闲聊与番茄钟](docs/COMPANION-ACTIVITY.md)）。
+- **三套蓝色主题**：海盐汽水、深海夜光、女仆墨蓝，在菜单里切换；点角色的气泡只说额度，去掉了自定义泡泡编辑器。
+- **任务小窗**：屏幕上常驻一个小窗，每个 Claude Code、Codex CLI、Codex App 会话一行：处理中、完成、提问、要权限、卡住、出错、空闲各有颜色，右侧是上下文 token；点一行跳回那个会话（macOS 上是 Ghostty 的标签），左右滑走一行，可收起或跟着角色（[任务小窗](docs/AGENTS.md)）。
+- **工程**：行为测试和隔离的桌面冒烟测试（不花任何模型额度）、模块拆分、术语表 [CONTEXT.md](CONTEXT.md) 和架构决策记录 [docs/adr](docs/adr)。
+
+## 分支
+
+- **`main`**：macOS 上验证过的版本。
+- **`windows-support`**：Windows 适配，按推断写成、还没在 Windows 实机上跑过；验证与调试见分支里的 `docs/WINDOWS-PORT.md`。
+
+## 概览
+
+**没有独立网页、浏览器面板或本地网页端口。** 界面由透明辅助窗口承载，通过本地进程间通信读取数据。所有菜单、设置、素材和账本都在挂件中操作。它并未修改或注入 Codex 的安装文件。
 
 **运行平台**：Windows 10/11 x64，或 Apple Silicon / Intel Mac；需要 Node.js 24+。挂件本身不依赖 Codex 桌面应用运行；安装 Codex 后才能在本机会话记录中观察 Codex token 用量。详细步骤见 [macOS 安装说明](docs/MACOS.md)。
 
@@ -27,7 +47,7 @@
 - 右键角色：在角色下方打开会话并聚焦输入；Enter 发送，Shift+Enter 换行。菜单中的 **会话设置** 选择大肥鱼账户、模型、人设与最长回复 token 数；账户和密钥在额度管理里添加。回复气泡随流式内容增长，支持停止、记录和新会话。详见 [角色会话](docs/CHAT.md)。Shift+右键仍可打开挂件菜单。
 - 角色会话支持 **会话列表、新建、继续旧会话和单独删除**；macOS 按 Ctrl+0 可全局打开并聚焦输入框。旧记录自动迁移，普通会话的上下文各自独立；存放主动闲聊的“随便聊聊”记得所有会话的近况。删除会话保留消费。
 - DeepSeek 官方角色会话在发送按钮左侧显示 **本地近 30 天消费估算与账号余额**，支持手动刷新，金额跟随显示币种。消费取估算上下限平均值并保留两位小数，来自本地聊天调用及可恢复的历史用量，独立保存；不代表官网账号总消费。余额与额度管理看到的是同一次查询。
-- 当前开发工作区增加 **主动闲聊与番茄钟**（尚未纳入 `codex-v0.2.6` 标签）：会话设置可启用主动闲聊并指定时间段和频率；直接对大肥鱼说出专注、休息、循环要求，它可按人设安排或调整时间，到点提醒。点击阶段提醒即可开始休息或下一轮专注，菜单“声音”里的“番茄钟”可独立开关或自定义提醒音。番茄钟操作使用固定白名单，不逐次弹权限窗口；详见 [主动闲聊与番茄钟](docs/COMPANION-ACTIVITY.md)。
+- **主动闲聊与番茄钟**：会话设置可启用主动闲聊并指定时间段和频率；直接对大肥鱼说出专注、休息、循环要求，它可按人设安排或调整时间，到点提醒。点击阶段提醒即可开始休息或下一轮专注，菜单“声音”里的“番茄钟”可独立开关或自定义提醒音。番茄钟操作使用固定白名单，不逐次弹权限窗口；详见 [主动闲聊与番茄钟](docs/COMPANION-ACTIVITY.md)。
 - **任务小窗**：屏幕右上角常驻一个小窗，每个 Claude Code、Codex CLI、Codex App 会话一行：状态点（绿＝处理中／完成，黄＝提问／要权限，红＝卡住／出错）、工具图标、项目、状态和上下文里的 token。点一行跳到那个会话的 Ghostty 标签或 Codex 线程，左右滑动一行把它移走；鼠标停在一行上看详情。可以跟着大肥鱼、拖到别处或收起成一列点，菜单“桌面”里可关闭。详见 [任务小窗](docs/AGENTS.md)。
 - Codex 请求权限时，提醒气泡会一直显示，点击气泡或鲸鱼后关闭；菜单“声音”里的“审批提醒”可单独关闭或选用已导入的音频片段／音效组。
 - **Windows：Ctrl+Alt+W；macOS：Cmd+Option+W**，也可使用系统托盘菜单：隐藏/显示。托盘菜单可刷新额度、查看额度记录、查看运行状态或停止当前挂件；macOS 的鲸鱼 `☰` 菜单底部也有这些命令，Windows 上只有查看额度记录。
@@ -136,7 +156,7 @@ vendor/smol-toml            内置 TOML 解析（BSD-3-Clause）
 vendor/eventsource-parser   内置流式事件解析（MIT）
 ```
 
-## 给维护者：本分支包含什么
+## 仓库包含什么
 
 **包含（可直接运行）**：`.codex-plugin/`、`assets/`、`desktop/`、`runtime/`、`lib/`、`scripts/`、`skills/`、`vendor/`、`docs/`、`LICENSE`、`PROVENANCE.md`、`THIRD_PARTY_NOTICES.md`、`package.json`、`.mcp.json`，以及 Windows `.cmd`、macOS `.command` 便捷入口和启动器 `.app`。源码仓库还包含 `tests/`。
 
@@ -145,17 +165,6 @@ vendor/eventsource-parser   内置流式事件解析（MIT）
 - `node_modules/`、`web/`、`qa-output/` 等依赖、开发与构建产物；发布包额外排除源码测试 `tests/`；
 - 依赖作者本机备份的旧回滚脚本、历史调试文档与含本机时间戳的 `*-VALIDATION.json`——它们描述的是作者本机的升级过程，对其他人没有意义；
 - 任何密钥、账号数据、用户账本：这些只存在于使用者本机的 `~/.codex/whale-widget`，仓库里没有也不需要。
-
-## 来源与致谢
-
-本分支改编自 **MeteorNOX** 的 [DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（`dsh-whale-widget`），沿用其 MIT 许可与角色/气泡/音效素材；改造范围与许可边界见 [PROVENANCE.md](PROVENANCE.md) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，原版文档备份在 [docs/UPSTREAM-README.md](docs/UPSTREAM-README.md)。
-
-### 0.2.4 致谢
-
-- **[@1llysviel](https://github.com/1llysviel)**：macOS 适配（[PR #128](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/pull/128)）——窗口探针、自动跟随与常驻恢复、Electron 浮窗、安装/卸载流程与菜单命令。
-- **[@MeteorNOX](https://github.com/MeteorNOX)**：上游项目与 `dsh-whale-widget` 主线的全部基础工作。
-
-历史贡献者名单见 [`docs/CHANGELOG-0.2.4.md`](docs/CHANGELOG-0.2.4.md)。
 
 ## 反馈与安全
 
